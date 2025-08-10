@@ -9,15 +9,16 @@ glow = ["eframe/glow"]
 wgpu = ["eframe/wgpu"]
 
 [dependencies]
-rand = "0.8"
-rand_pcg = "0.3"
-anyhow = "1"
 regex = "1"
+anyhow = "1"
+rand = "0.8"
+egui = "0.27"
 walkdir = "2"
 image = "0.25"
+rand_pcg = "0.3"
+audiotags = "0.5"
 rodio = { version = "0.17", features = ["symphonia-all"] }
 eframe = { version = "0.27", default-features = false, features = ["glow"] }
-egui = "0.27"
 
 symphonia = { version = "0.5", features = [
   "aac", "alac", "flac", "vorbis", "mp3", "isomp4",

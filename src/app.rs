@@ -26,9 +26,6 @@ use crate::{
     track::{
         Track,
         scan_tracks,
-        guess_artist_album,
-        split_artist_title,
-        strip_leading_track_numbers,
     },
     ui::widgets::{
         seekbar,
@@ -41,9 +38,9 @@ use crate::{
     },
     util::{
         home_dir,
-        normalize_ws,
         is_audio_file,
-        seconds_to_mmss
+        seconds_to_mmss,
+        parse_track_meta,
     },
     theme::{
         lerp_srgb,
@@ -508,29 +505,42 @@ impl MusaApp {
         }
         if let Some(file) = file_to_play {
             self.player.stop();
-            let (artist, album, album_dir, disc_no) = guess_artist_album(&file);
-            let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-            let stem = normalize_ws(stem);
-            let (leading_no, s1) = strip_leading_track_numbers(&stem);
-            let (artist_from_file, s2) = split_artist_title(&s1);
-            let title = normalize_ws(s2);
-            let artist_final = artist_from_file.unwrap_or(artist);
+            let m = parse_track_meta(&file);
+
+            let title = if m.title.is_empty() {
+                file.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown").to_string()
+            } else {
+                m.title
+            };
+
+            let artist = if m.artist.is_empty() {
+                "Unknown Artist".to_string()
+            } else {
+                m.artist
+            };
+            let album  = if m.album.is_empty() {
+                "Unknown Album".to_string() 
+            } else {
+                m.album
+            };
+
+            let album_dir = file.parent()
+                .and_then(|p| if p.file_name().is_some_and(|n| n == "songs") {
+                    p.parent()
+                } else {
+                    Some(p)
+                })
+                .and_then(|p| p.file_name()).and_then(|s| s.to_str()).unwrap_or("").to_string();
+
             self.player.playlist = vec![Track {
                 path: file.clone(),
                 title,
-                artist: artist_final,
+                artist,
                 album,
-                album_dir,
-                track_no: leading_no,
-                disc_no,
+                album_dir: album_dir.into(),
+                track_no: m.track_no,
+                disc_no:  m.disc_no,
             }];
-            self.player.index = 0;
-            if let Err(e) = self.player.play_current() {
-                self.status = format!("Playback error: {e}");
-            } else {
-                self.update_cover_from_current_track();
-                self.view = UiView::Player;
-            }
         }
     }
 
