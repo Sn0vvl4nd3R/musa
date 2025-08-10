@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use anyhow::{
     anyhow,
     Context,
@@ -19,6 +20,10 @@ use std::{
         Instant
     }
 };
+use std::sync::{
+    Arc,
+    Mutex,
+};
 
 use crate::{
     duration::probed_duration,
@@ -35,6 +40,7 @@ pub struct Player {
     pub track_total: Option<Duration>,
     pos_base: Duration,
     pos_started_at: Option<Instant>,
+    vis_buf: Arc<VisBuffer>,
 }
 
 impl Player {
@@ -49,6 +55,7 @@ impl Player {
             track_total: None,
             pos_base: Duration::ZERO,
             pos_started_at: None,
+            vis_buf: VisBuffer::new(96_000),
         }
     }
 
@@ -107,10 +114,11 @@ impl Player {
     ) -> Result<()> {
         self.ensure_stream()?;
         let src = dec.skip_duration(skip).convert_samples::<f32>();
+        let tap = TapSource::new(src, self.vis_buf.clone());
         let handle = self.handle.as_ref().unwrap();
         let sink = Sink::try_new(handle).map_err(|e| anyhow!("Failed to create sink: {e}"))?;
         sink.set_volume(self.volume);
-        sink.append(src);
+        sink.append(tap);
         sink.play();
         self.sink = Some(sink);
         self.pos_base = skip;
@@ -192,6 +200,77 @@ impl Player {
             }
         }
         Ok(())
+    }
+
+    pub fn vis_buffer(&self) -> Arc<VisBuffer> {
+        self.vis_buf.clone()
+    }
+}
+
+pub struct VisBuffer {
+    q: Mutex<VecDeque<f32>>,
+    cap: usize,
+}
+
+impl VisBuffer {
+    pub fn new(cap: usize) -> Arc<Self> {
+        Arc::new(Self {
+            q: Mutex::new(VecDeque::with_capacity(cap)),
+            cap
+        })
+    }
+    pub fn push(&self, s: f32) {
+        let mut q = self.q.lock().unwrap();
+        let len = q.len();
+        if len >= self.cap {
+            q.drain(..len + 1 - self.cap);
+        }
+        q.push_back(s);
+    }
+    pub fn take_recent(&self, n: usize) -> Vec<f32> {
+        let q = self.q.lock().unwrap();
+        let k = n.min(q.len());
+        q.iter().rev().take(k).cloned().collect::<Vec<_>>().into_iter().rev().collect()
+    }
+}
+
+struct TapSource<S> {
+    inner: S,
+    buf: Arc<VisBuffer>,
+}
+impl<S> TapSource<S> {
+    fn new(inner: S, buf: Arc<VisBuffer>) -> Self {
+        Self {
+            inner,
+            buf
+        }
+    }
+}
+impl<S> Iterator for TapSource<S>
+where S: Source<Item = f32>,
+{
+    type Item = f32;
+    fn next (&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|x| {
+            self.buf.push(x);
+            x
+        })
+    }
+}
+impl<S> Source for TapSource<S>
+where S: Source<Item = f32>,
+{
+    fn current_frame_len(&self) -> Option<usize> {
+        self.inner.current_frame_len()
+    }
+    fn channels(&self) -> u16 {
+        self.inner.channels()
+    }
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        self.inner.total_duration()
     }
 }
 

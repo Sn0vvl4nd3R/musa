@@ -1,6 +1,6 @@
 use eframe::egui::{
     self,
-    Color32
+    Color32,
 };
 
 pub fn icon_button_circle(
@@ -29,6 +29,7 @@ pub fn icon_button_circle(
     let center = rect.center();
     let radius = diameter * 0.5;
     painter.circle_filled(center, radius, bg_fill);
+    painter.circle_stroke(center, radius, egui::Stroke::new(1.0, Color32::WHITE));
     painter.circle_stroke(center, radius, bg_stroke);
 
     let icon_rect = rect.shrink(diameter * 0.28);
@@ -68,9 +69,17 @@ pub fn draw_icon_next(p: &egui::Painter, r: egui::Rect, color: Color32) {
     let y_top = rr.top();
     let y_mid = rr.center().y;
     let y_bot = rr.bottom();
-    let tri1 = vec![egui::pos2(x_left, y_top), egui::pos2(x_left + tw, y_mid), egui::pos2(x_left, y_bot)];
+    let tri1 = vec![
+        egui::pos2(x_left, y_top),
+        egui::pos2(x_left + tw, y_mid),
+        egui::pos2(x_left, y_bot),
+    ];
     let x2 = x_left + tw + gap;
-    let tri2 = vec![egui::pos2(x2, y_top), egui::pos2(x2 + tw, y_mid), egui::pos2(x2, y_bot)];
+    let tri2 = vec![
+        egui::pos2(x2, y_top),
+        egui::pos2(x2 + tw, y_mid),
+        egui::pos2(x2, y_bot),
+    ];
     p.add(egui::Shape::convex_polygon(tri1, color, egui::Stroke::new(0.0, color)));
     p.add(egui::Shape::convex_polygon(tri2, color, egui::Stroke::new(0.0, color)));
 }
@@ -80,10 +89,20 @@ pub fn draw_icon_prev(p: &egui::Painter, r: egui::Rect, color: Color32) {
     let gap = tw * 0.30;
     let total = tw * 2.0 + gap;
     let x_right = rr.center().x + total * 0.5;
-    let y_top = r.top(); let y_mid = r.center().y; let y_bot = r.bottom();
-    let tri1 = vec![egui::pos2(x_right, y_top), egui::pos2(x_right - tw, y_mid), egui::pos2(x_right, y_bot)];
+    let y_top = rr.top();
+    let y_mid = rr.center().y;
+    let y_bot = rr.bottom();
+    let tri1 = vec![
+        egui::pos2(x_right, y_top),
+        egui::pos2(x_right - tw, y_mid),
+        egui::pos2(x_right, y_bot),
+    ];
     let x2 = x_right - tw - gap;
-    let tri2 = vec![egui::pos2(x2, y_top), egui::pos2(x2 - tw, y_mid), egui::pos2(x2, y_bot)];
+    let tri2 = vec![
+        egui::pos2(x2, y_top),
+        egui::pos2(x2 - tw, y_mid),
+        egui::pos2(x2, y_bot),
+    ];
     p.add(egui::Shape::convex_polygon(tri1, color, egui::Stroke::new(0.0, color)));
     p.add(egui::Shape::convex_polygon(tri2, color, egui::Stroke::new(0.0, color)));
 }
@@ -94,6 +113,7 @@ pub fn seekbar(
     total: f32,
     width: f32,
     height: f32,
+    accent: Color32,
 ) -> Option<f32> {
     let have_total = total.is_finite() && total > 0.0;
     let sense = if have_total {
@@ -101,19 +121,14 @@ pub fn seekbar(
     } else {
         egui::Sense::hover()
     };
-
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width.max(60.0), height), sense);
     ui.expand_to_include_rect(rect);
 
     let painter = ui.painter_at(rect);
-    let bg = if have_total {
-        Color32::from_gray(115)
-    } else {
-        Color32::from_gray(70)
-    };
-    let border = Color32::from_gray(165);
+    let bg = Color32::from_rgb(56, 56, 60);
+    let border = Color32::from_rgb(92, 92, 96);
     let played = if have_total {
-        Color32::WHITE
+        accent
     } else {
         Color32::from_gray(110)
     };
@@ -138,7 +153,7 @@ pub fn seekbar(
             6.5
         };
         let center = egui::pos2(w, rect.center().y);
-        painter.circle_filled(center, r, Color32::WHITE);
+        painter.circle_filled(center, r, accent);
         painter.circle_stroke(center, r, egui::Stroke::new(1.0, border));
 
         if resp.clicked() || resp.dragged() {
@@ -150,4 +165,10 @@ pub fn seekbar(
         }
     }
     None
+}
+
+pub fn accent_button(ui: &mut egui::Ui, label: &str, accent: Color32) -> egui::Response {
+    let fill = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 36);
+    let stroke = egui::Stroke::new(1.0, accent);
+    ui.add(egui::Button::new(label).fill(fill).stroke(stroke))
 }

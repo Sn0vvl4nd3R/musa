@@ -9,6 +9,8 @@ glow = ["eframe/glow"]
 wgpu = ["eframe/wgpu"]
 
 [dependencies]
+rand = "0.8"
+rand_pcg = "0.3"
 anyhow = "1"
 regex = "1"
 walkdir = "2"

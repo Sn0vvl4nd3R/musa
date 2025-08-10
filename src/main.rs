@@ -1,19 +1,19 @@
-use anyhow::Result;
 use eframe::{
     egui,
     Renderer
 };
+use anyhow::Result;
 use std::env;
-
 mod app;
 mod player;
 mod track;
 mod util;
 mod duration;
 mod cover;
-mod ui;
-
-use app::MusaApp;
+mod ui {
+    pub mod widgets;
+}
+mod theme;
 
 #[derive(Clone, Copy)]
 struct LaunchCfg {
@@ -48,7 +48,7 @@ impl LaunchCfg {
         if env::var_os("MUSA_FORCE_X11").is_some() {
             force_x11 = true;
         }
-
+        
         for arg in env::args().skip(1) {
             match arg.as_str() {
                 "--glow" => renderer = Renderer::Glow,
@@ -89,14 +89,12 @@ fn main() -> Result<()> {
         vsync: cfg.vsync,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size(egui::vec2(900.0, 700.0))
-            .with_min_inner_size(egui::vec2(min_w, min_h)),
+            .with_min_inner_size(egui::vec2(min_w, min_h))
+            .with_decorations(true),
         ..Default::default()
     };
 
-    let app = MusaApp::new()?;
-    eframe::run_native(
-        "MUSA - Music Player",
-        native_opts,
-        Box::new(|_| Box::new(app)),
-    ).map_err(|e| anyhow::anyhow!("GUI error: {e}"))
+    let app = app::MusaApp::new()?;
+    eframe::run_native("MUSA - Music Player", native_opts, Box::new(|_| Box::new(app)))
+        .map_err(|e| anyhow::anyhow!("GUI error: {e}"))
 }
