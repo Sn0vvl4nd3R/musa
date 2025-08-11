@@ -10,19 +10,13 @@ use eframe::{
 use std::{
     sync::mpsc,
     path::PathBuf,
-    time::{
-        Duration
-    },
+    time::Duration,
 };
 
 use crate::{
     player::Player,
-    theme::{
-        apply_visuals,
-    },
-    util::{
-        seconds_to_mmss,
-    },
+    theme::apply_visuals,
+    util::seconds_to_mmss,
     ui::widgets::{
         seekbar,
         draw_icon_play,
@@ -62,7 +56,6 @@ pub struct MusaApp {
     cover_rx: Option<mpsc::Receiver<anyhow::Result<(usize, usize, Vec<u8>, String, [Color32; 3])>>>,
 
     bg_colors: [Color32; 3],
-    bg_tex: Option<egui::TextureHandle>,
     accent: Color32,
     title_color: Color32,
     header_color: Color32,
@@ -80,6 +73,21 @@ pub struct MusaApp {
     agc_target: f32,
     agc_gain_min: f32,
     agc_gain_max: f32,
+
+    pub bg_time: f32,
+
+    pub bg_music_drive: f32,
+    pub bg_music_env: f32,
+    pub bg_pulse: f32,
+
+    pub bg_phase1: f32,
+    pub bg_phase2: f32,
+    pub bg_phase3: f32,
+    pub bg_phase4: f32,
+    pub bg_speed1: f32,
+    pub bg_speed2: f32,
+    pub bg_speed3: f32,
+    pub bg_speed4: f32,
 }
 
 impl MusaApp {
@@ -90,18 +98,55 @@ impl MusaApp {
 
 impl App for MusaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        anim::tick_theme_anim(self, ctx);
-
         let now = std::time::Instant::now();
         self.dt_sec = (now - self.last_frame).as_secs_f32().clamp(0.001, 0.05);
         self.last_frame = now;
+        self.bg_time += self.dt_sec;
 
+        let recent = self.player.vis_buffer().take_recent(4096);
+        let target = if recent.len() >= 256 {
+            let mut v: Vec<f32> = recent.iter().map(|x| x.abs()).collect();
+            v.sort_by(|a,b| a.partial_cmp(b).unwrap());
+            let p = v[((v.len() as f32 * 0.90) as usize).min(v.len() - 1)];
+            (p * 2.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let a_fast = 1.0 - (-self.dt_sec / 0.15).exp();
+        self.bg_music_drive += (target - self.bg_music_drive) * a_fast;
+
+        let a_slow = 1.0 - (-self.dt_sec / 0.90).exp();
+        self.bg_music_env += (target - self.bg_music_env) * a_slow;
+
+        let onset = (self.bg_music_drive - self.bg_music_env * 1.06).max(0.0);
+        self.bg_pulse = (self.bg_pulse + onset * 2.4).min(1.0);
+        self.bg_pulse *= ( -self.dt_sec / 0.45 ).exp();
+
+        let base = [0.010, 0.008, 0.006, 0.007];
+        let speed_mul = 0.7 + 0.9 * self.bg_music_env;
+
+        let targets = [
+            base[0] * speed_mul,
+            base[1] * speed_mul,
+            base[2] * speed_mul,
+            base[3] * speed_mul,
+        ];
+        let a_v = 1.0 - (-self.dt_sec / 0.70).exp();
+        self.bg_speed1 += (targets[0] - self.bg_speed1) * a_v;
+        self.bg_speed2 += (targets[1] - self.bg_speed2) * a_v;
+        self.bg_speed3 += (targets[2] - self.bg_speed3) * a_v;
+        self.bg_speed4 += (targets[3] - self.bg_speed4) * a_v;
+
+        self.bg_phase1 = (self.bg_phase1 + self.bg_speed1 * self.dt_sec) % 1.0;
+        self.bg_phase2 = (self.bg_phase2 + self.bg_speed2 * self.dt_sec) % 1.0;
+        self.bg_phase3 = (self.bg_phase3 + self.bg_speed3 * self.dt_sec) % 1.0;
+        self.bg_phase4 = (self.bg_phase4 + self.bg_speed4 * self.dt_sec) % 1.0;
+
+        anim::tick_theme_anim(self, ctx);
         apply_visuals(ctx, self.accent);
 
-        if self.bg_tex.is_none() {
-            anim::rebuild_bg_texture(self, ctx);
-        }
-        anim::paint_bg_gradient(ctx, &self.bg_tex, self.bg_colors);
+        anim::paint_bg_gradient(ctx, self);
 
         cover::poll_cover_result(self, ctx);
         scanner::poll_scan_result(self, ctx);

@@ -1,9 +1,9 @@
+use regex::Regex;
 use std::path::{
     Component,
     Path,
     PathBuf
 };
-use regex::Regex;
 
 pub fn is_audio_file(p: &Path) -> bool {
     match p.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase()) {

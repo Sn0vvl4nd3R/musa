@@ -1,14 +1,14 @@
+use egui::Color32;
+use rand_pcg::Pcg32;
+use rand::{
+    Rng,
+    SeedableRng
+};
 use image::{
     DynamicImage,
     GenericImageView,
     imageops::FilterType
 };
-use rand::{
-    Rng,
-    SeedableRng
-};
-use rand_pcg::Pcg32;
-use egui::Color32;
 
 #[inline]
 fn sqr_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -52,7 +52,7 @@ pub fn lerp_srgb(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
-fn rgb_to_hsv(c: Color32) -> (f32, f32, f32) {
+pub(crate) fn rgb_to_hsv(c: Color32) -> (f32, f32, f32) {
     let r = c.r() as f32 / 255.0;
     let g = c.g() as f32 / 255.0;
     let b = c.b() as f32 / 255.0;
@@ -79,7 +79,7 @@ fn rgb_to_hsv(c: Color32) -> (f32, f32, f32) {
         h
     }, s, max)
 }
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
+pub(crate) fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
     let c = v * s;
     let x = c * (1.0 - (((h / 60.0) % 2.0) - 1.0).abs());
     let m = v - c;
@@ -97,7 +97,6 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
         ((b1 + m) * 255.0) as u8,
     )
 }
-
 
 pub fn extract_palette(img: &DynamicImage, k: usize) -> [Color32; 3] {
     let k = k.max(2).min(6);

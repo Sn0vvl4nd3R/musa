@@ -1,10 +1,10 @@
+use anyhow::anyhow;
+use walkdir::WalkDir;
+use crate::util::is_audio_file;
 use std::path::{
     Path,
     PathBuf
 };
-use crate::util::is_audio_file;
-use anyhow::anyhow;
-use walkdir::WalkDir;
 
 
 #[derive(Clone)]
