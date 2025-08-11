@@ -1,19 +1,20 @@
+use anyhow::Result;
+use std::env;
 use eframe::{
     egui,
     Renderer
 };
-use anyhow::Result;
-use std::env;
+
 mod app;
-mod player;
-mod track;
 mod util;
-mod duration;
+mod track;
 mod cover;
+mod theme;
+mod player;
+mod duration;
 mod ui {
     pub mod widgets;
 }
-mod theme;
 
 #[derive(Clone, Copy)]
 struct LaunchCfg {
