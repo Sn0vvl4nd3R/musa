@@ -1,39 +1,39 @@
-use std::collections::VecDeque;
 use anyhow::{
     anyhow,
-    Context,
-    Result
+    Result,
 };
 use rodio::{
+    Sink,
+    Source,
     Decoder,
     OutputStream,
     OutputStreamHandle,
-    Sink,
-    Source
 };
 use std::{
     fs::File,
-    io::BufReader,
+    sync::Arc,
     path::Path,
+    io::BufReader,
     time::{
+        Instant,
         Duration,
-        Instant
-    }
-};
-use std::sync::{
-    Arc,
-    Mutex,
+    },
 };
 
 use crate::{
+    track::Track,
     duration::probed_duration,
-    track::Track
+};
+use super::{
+    vis::VisBuffer,
+    tap::TapSource,
+    io::open_decoder,
 };
 
 pub struct Player {
     stream: Option<OutputStream>,
     handle: Option<OutputStreamHandle>,
-    sink: Option<Sink>,
+    sink:   Option<Sink>,
     pub playlist: Vec<Track>,
     pub index: usize,
     pub volume: f32,
@@ -87,7 +87,9 @@ impl Player {
 
     pub fn current_pos(&self) -> Duration {
         if let Some(st) = self.pos_started_at {
-            if self.is_playing() { return self.pos_base.saturating_add(st.elapsed()); }
+            if self.is_playing() {
+                return self.pos_base.saturating_add(st.elapsed());
+            }
         }
         self.pos_base
     }
@@ -205,78 +207,4 @@ impl Player {
     pub fn vis_buffer(&self) -> Arc<VisBuffer> {
         self.vis_buf.clone()
     }
-}
-
-pub struct VisBuffer {
-    q: Mutex<VecDeque<f32>>,
-    cap: usize,
-}
-
-impl VisBuffer {
-    pub fn new(cap: usize) -> Arc<Self> {
-        Arc::new(Self {
-            q: Mutex::new(VecDeque::with_capacity(cap)),
-            cap
-        })
-    }
-    pub fn push(&self, s: f32) {
-        let mut q = self.q.lock().unwrap();
-        let len = q.len();
-        if len >= self.cap {
-            q.drain(..len + 1 - self.cap);
-        }
-        q.push_back(s);
-    }
-    pub fn take_recent(&self, n: usize) -> Vec<f32> {
-        let q = self.q.lock().unwrap();
-        let k = n.min(q.len());
-        q.iter().rev().take(k).cloned().collect::<Vec<_>>().into_iter().rev().collect()
-    }
-}
-
-struct TapSource<S> {
-    inner: S,
-    buf: Arc<VisBuffer>,
-}
-impl<S> TapSource<S> {
-    fn new(inner: S, buf: Arc<VisBuffer>) -> Self {
-        Self {
-            inner,
-            buf
-        }
-    }
-}
-impl<S> Iterator for TapSource<S>
-where S: Source<Item = f32>,
-{
-    type Item = f32;
-    fn next (&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|x| {
-            self.buf.push(x);
-            x
-        })
-    }
-}
-impl<S> Source for TapSource<S>
-where S: Source<Item = f32>,
-{
-    fn current_frame_len(&self) -> Option<usize> {
-        self.inner.current_frame_len()
-    }
-    fn channels(&self) -> u16 {
-        self.inner.channels()
-    }
-    fn sample_rate(&self) -> u32 {
-        self.inner.sample_rate()
-    }
-    fn total_duration(&self) -> Option<std::time::Duration> {
-        self.inner.total_duration()
-    }
-}
-
-fn open_decoder(path: &Path) -> Result<Decoder<BufReader<File>>> {
-    let f = File::open(path)
-        .with_context(|| format!("Failed to open file: {}", path.display()))?;
-    let reader = BufReader::new(f);
-    Decoder::new(reader).map_err(|e| anyhow!("rodio::Decoder error for {}: {e}", path.display()))
 }
