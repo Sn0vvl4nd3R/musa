@@ -944,12 +944,6 @@ impl App for MusaApp {
                 UiView::Playlist => self.ui_page_playlist(ui),
             });
 
-        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
-        let next_in = if focused {
-            Duration::from_millis(16)
-        } else {
-            Duration::from_millis(250)
-        };
-        ctx.request_repaint_after(next_in);
+        ctx.request_repaint_after(Duration::from_millis(16));
     }
 }

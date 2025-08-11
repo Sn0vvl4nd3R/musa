@@ -82,7 +82,7 @@ fn main() -> Result<()> {
     }
 
     let min_w = 780.0;
-    let min_h = 660.0;
+    let min_h = 900.0;
 
     let native_opts = eframe::NativeOptions {
         renderer: cfg.renderer,
