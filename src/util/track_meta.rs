@@ -1,9 +1,11 @@
 use regex::Regex;
 use std::path::Path;
+use std::borrow::Cow;
+use once_cell::sync::Lazy;
 
 use super::{
-    path_heur::infer_artist_album_from_path,
     tags::read_tags,
+    path_heur::infer_artist_album_from_path,
     text::{
         normalize_ws,
         strip_tech_brackets,
@@ -20,45 +22,64 @@ pub struct TrackMeta {
     pub disc_no: Option<u32>,
 }
 
+static RE_DISC_TRACK: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?x)^ \s*
+        (?P<disc>\d{1,2}) \s* [-_.] \s*
+        (?P<track>\d{1,3})
+        (?:\s* [\.\)\-_] \s*){1,3} \s+
+        (?P<rest>.+)
+    $"#).unwrap()
+});
+
+static RE_TRACK_REST: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?x)^ \s*
+        (?P<track>\d{1,3})
+        (?:\s* [\.\)\-_] \s*){1,3} \s+
+        (?P<rest>.+)
+    $"#).unwrap()
+});
+
+static RE_ONLY_TRACK: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^\s*(?P<track>\d{1,3})\s*$"#).unwrap());
+
+#[inline]
+fn trim_leading_separators(mut s: &str) -> &str {
+    for sep in ["- ", "– ", "— "] {
+        if let Some(rest) = s.strip_prefix(sep) {
+            s = rest;
+            break;
+        }
+    }
+    s.trim_start()
+}
+
 fn parse_track_number(s: &str) -> (Option<u32>, Option<u32>, String) {
-    let re_disc = Regex::new(
-        r#"(?x) ^ \s*
-           (?P<disc>\d{1,2}) \s* [-_\.] \s*
-           (?P<track>\d{1,3})
-           \s* [\.\)\-_]+ \s*
-           (?P<rest>.+)
-        "#
-    ).unwrap();
-    if let Some(c) = re_disc.captures(s) {
+    if let Some(c) = RE_DISC_TRACK.captures(s) {
         let disc = c["disc"].parse::<u32>().ok();
         let track = c["track"].parse::<u32>().ok();
-        let rest = c["rest"].trim().to_string();
+        let rest = trim_leading_separators(c.name("rest").unwrap().as_str()).to_string();
         return (track, disc, rest);
     }
-
-    let re = Regex::new(r#"(?x) ^ \s* (?P<track>\d{1,3}) \s* [\.\)\-_]+ \s* (?P<rest>.+) "#).unwrap();
-    if let Some(c) = re.captures(s) {
+    if let Some(c) = RE_TRACK_REST.captures(s) {
         let track = c["track"].parse::<u32>().ok();
-        let rest = c["rest"].trim().to_string();
+        let rest = trim_leading_separators(c.name("rest").unwrap().as_str()).to_string();
         return (track, None, rest);
     }
-
-    let re_only = Regex::new(r#"^\s*(?P<track>\d{1,3})\s*$"#).unwrap();
-    if let Some(c) = re_only.captures(s) {
+    if let Some(c) = RE_ONLY_TRACK.captures(s) {
         let track = c["track"].parse::<u32>().ok();
-        return (track, None, "".to_string());
+        return (track, None, String::new());
     }
-
     (None, None, s.trim().to_string())
 }
 
 fn maybe_split_artist_title(file_stem: &str, known_artist: Option<&str>) -> Option<(String, String)> {
-    if let Some(idx) = file_stem.find(" - ") {
-        if let Some(ka) = known_artist {
-            let (left, right) = file_stem.split_at(idx);
-            let right = &right[3..];
-            if left.trim().eq_ignore_ascii_case(ka.trim()) {
-                return Some((left.trim().to_string(), right.trim().to_string()));
+    for sep in [" - ", " – ", " — "] {
+        if let Some(idx) = file_stem.find(sep) {
+            if let Some(ka) = known_artist {
+                let (left, right) = file_stem.split_at(idx);
+                let right = &right[sep.len()..];
+                if left.trim().eq_ignore_ascii_case(ka.trim()) {
+                    return Some((left.trim().to_string(), right.trim().to_string()));
+                }
             }
         }
     }
@@ -73,35 +94,37 @@ pub fn parse_track_meta(path: &Path) -> TrackMeta {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
     let (track_from_name, disc_from_name, name_rest) = parse_track_number(stem);
 
-    let artist = tf.artist
-        .clone()
-        .or_else(|| tf.album_artist.clone())
-        .or(artist_from_path.clone())
-        .unwrap_or_default();
+    let artist = tf.artist.as_deref()
+        .or(tf.album_artist.as_deref())
+        .or(artist_from_path.as_deref())
+        .unwrap_or("")
+        .to_owned();
 
-    let album_raw = tf.album
-        .clone()
-        .or(album_from_path_raw.clone())
-        .unwrap_or_default();
+    let album_raw = tf.album.as_deref()
+        .or(album_from_path_raw.as_deref())
+        .unwrap_or("")
+        .to_owned();
 
     let album = if artist.is_empty() {
-        normalize_ws(album_raw)
+        normalize_ws(&album_raw).into_owned()
     } else {
         clean_album_for_display(&album_raw, &artist)
     };
 
-    let title0 = tf.title.clone().unwrap_or_else(|| name_rest.clone());
-    let title = if let Some((_a, t)) = maybe_split_artist_title(
-        &title0,
-        if artist.is_empty() {
-            None
-        } else {
-            Some(&artist)
-        }
-    ) {
-        normalize_ws(strip_tech_brackets(t))
+    let title0_cow: Cow<'_, str> = if let Some(t) = tf.title.as_deref() {
+        Cow::Borrowed(t)
     } else {
-        normalize_ws(strip_tech_brackets(title0))
+        Cow::Owned(name_rest)
+    };
+
+    let title = if let Some((_a, t)) = maybe_split_artist_title(&title0_cow, if artist.is_empty() {
+        None
+    } else {
+        Some(&artist)
+    }) {
+        normalize_ws(&strip_tech_brackets(&t)).into_owned()
+    } else {
+        normalize_ws(&strip_tech_brackets(&title0_cow)).into_owned()
     };
 
     let track_no = tf.track_no.or(track_from_name);
@@ -113,5 +136,5 @@ pub fn parse_track_meta(path: &Path) -> TrackMeta {
         title,
         track_no,
         disc_no
-        }
+    }
 }

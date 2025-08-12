@@ -1,4 +1,5 @@
 use regex::Regex;
+use once_cell::sync::Lazy;
 use std::path::{
     Path,
     Component
@@ -11,32 +12,38 @@ const BUCKETS: &[&str] = &[
     "tracks", "track", "songs", "song",
 ];
 
+#[inline]
 pub(crate) fn is_bucket(name: &str) -> bool {
     BUCKETS.iter().any(|b| name.eq_ignore_ascii_case(b))
 }
 
+static RE_DISC_LABEL: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\b(?:cd|disc|disk)\s*-?\s*(\d{1,2})\b").unwrap());
+
+#[inline]
 pub(crate) fn parse_disc_label(s: &str) -> Option<u32> {
-    let re = Regex::new(r"(?i)\b(?:cd|disc|disk)\s*-?\s*(\d{1,2})\b").unwrap();
-    re.captures(s)
+    RE_DISC_LABEL
+        .captures(s)
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse::<u32>().ok())
 }
 
 pub(crate) fn infer_artist_album_from_path(p: &Path) -> (Option<String>, Option<String>, Option<u32>) {
-    let mut parts: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = Vec::with_capacity(p.components().count());
     for c in p.components() {
         if let Component::Normal(os) = c {
-            parts.push(os.to_string_lossy().to_string());
+            parts.push(os.to_string_lossy().into_owned());
         }
     }
 
-    let mut cand: Vec<(usize, String)> = Vec::new();
+    let mut cand: Vec<(usize, String)> = Vec::with_capacity(parts.len());
     for (i, name) in parts.iter().enumerate() {
         let last = i + 1 == parts.len();
         let stem = if last {
             std::path::Path::new(name)
                 .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| name.clone())
         } else {
             name.clone()
