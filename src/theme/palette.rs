@@ -1,5 +1,6 @@
 use egui::Color32;
 use fastrand::Rng;
+
 use image::{
     DynamicImage,
     GenericImageView,
@@ -124,10 +125,10 @@ pub fn extract_palette(img: &DynamicImage, k: usize) -> [Color32; 3] {
 
 pub fn make_gradient_stops(pal: [Color32; 3]) -> [Color32; 3] {
     let mid = pal[1];
-    let mid_d = lerp_srgb(mid, Color32::from_rgb(0, 0, 0), 0.28);
-    let top = lerp_srgb(mid_d, Color32::from_rgb(255, 255, 255), 0.05);
-    let bottom = lerp_srgb(mid_d, Color32::from_rgb(0, 0, 0), 0.34);
-    [top, mid_d, bottom]
+    let mid_d = lerp_srgb(mid, Color32::from_rgb(0, 0, 0), 0.24);
+    let edge_dark = 0.25;
+    let edge = lerp_srgb(mid_d, Color32::from_rgb(0, 0, 0), edge_dark);
+    [edge, mid_d, edge]
 }
 
 pub fn accent_from_palette(pal: [Color32; 3]) -> Color32 {

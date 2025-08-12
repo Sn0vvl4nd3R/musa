@@ -65,6 +65,13 @@ pub struct MusaApp {
     scan_rx: Option<mpsc::Receiver<anyhow::Result<Vec<crate::track::Track>>>>,
 
     vis_draw: Vec<f32>,
+
+    vis_fast: Vec<f32>,
+    vis_slow: Vec<f32>,
+    vis_vals: Vec<f32>,
+    vis_tmp: Vec<f32>,
+    vis_pts: Vec<egui::Pos2>,
+
     last_frame: std::time::Instant,
     dt_sec: f32,
 

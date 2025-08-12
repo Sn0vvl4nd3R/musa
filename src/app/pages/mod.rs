@@ -35,6 +35,12 @@ pub(super) fn new_app() -> anyhow::Result<super::MusaApp> {
         scan_rx: None,
 
         vis_draw: vec![0.0; 120],
+        vis_fast: Vec::new(),
+        vis_slow: Vec::new(),
+        vis_vals: Vec::new(),
+        vis_tmp: Vec::new(),
+        vis_pts: Vec::new(),
+
         last_frame: std::time::Instant::now(),
         dt_sec: 1.0/60.0,
 

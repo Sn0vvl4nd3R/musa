@@ -33,23 +33,3 @@ pub(super) fn make_params(seed: u32) -> FlowParams {
         warp: 0.008 + 0.012 * rand01(seed ^ 0x55)
     }
 }
-
-#[inline]
-pub(super) fn flow_field(u: f32, v: f32, t: f32, p: &FlowParams) -> f32 {
-    let du = (u * 0.9 + 0.6 * t).sin() * (v * 0.7 - 0.4 * t).cos() * p.warp;
-    let dv = (u * 0.6 - 0.5 * t).cos() * (v * 0.8 + 0.3 * t).sin() * p.warp;
-    let (uu, vv) = (u + du, v + dv);
-
-    let mut acc = 0.0f32;
-    let mut norm = 0.0f32;
-    for i in 0..4 {
-        let phase = (p.kx[i] * uu + p.ky[i] * vv) * std::f32::consts::TAU
-                  + (p.w[i] * t) * std::f32::consts::TAU
-                  + p.ph[i];
-        let s = phase.sin();
-        let a = [0.48, 0.36, 0.30, 0.24][i];
-        acc += s * a;
-        norm += a;
-    }
-    (acc / norm).clamp(-1.0, 1.0)
-}
