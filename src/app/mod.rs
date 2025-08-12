@@ -16,7 +16,6 @@ use std::{
 use crate::{
     player::Player,
     theme::apply_visuals,
-    util::seconds_to_mmss,
     ui::widgets::{
         seekbar,
         draw_icon_play,

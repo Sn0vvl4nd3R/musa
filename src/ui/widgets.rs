@@ -163,6 +163,51 @@ pub fn draw_icon_repeat(p: &egui::Painter, r: egui::Rect, color: Color32, one: b
         p.text(center, egui::Align2::CENTER_CENTER, "1", font, color);
     }
 }
+pub fn volume_slider(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    width: f32,
+    accent: Color32,
+) -> egui::Response {
+    let h = 8.0;
+    let r = h * 0.5;
+
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(width.max(90.0), h),
+        egui::Sense::click_and_drag(),
+    );
+    ui.expand_to_include_rect(rect);
+
+    let painter = ui.painter_at(rect);
+
+    let bg = Color32::from_rgb(56, 56, 60);
+    let border = Color32::from_rgb(92, 92, 96);
+
+    painter.rect_filled(rect, r, bg);
+    painter.rect_stroke(rect, r, egui::Stroke::new(1.0, border));
+
+    let frac = (*value / 2.0).clamp(0.0, 1.0);
+    let w = rect.left() + rect.width() * frac;
+    let filled = egui::Rect::from_min_max(rect.min, egui::pos2(w, rect.bottom()));
+    painter.rect_filled(filled, r, accent);
+
+    let knob_r = if resp.hovered() || resp.dragged() {
+        4.8
+    } else {
+        4.0
+    };
+    let center = egui::pos2(w, rect.center().y);
+    painter.circle_filled(center, knob_r, accent);
+    painter.circle_stroke(center, knob_r, egui::Stroke::new(1.0, border));
+
+    if (resp.clicked() || resp.dragged()) && rect.width() > 0.0 {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let frac = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            *value = 2.0 * frac;
+        }
+    }
+    resp
+}
 
 pub fn seekbar(
     ui: &mut egui::Ui,

@@ -15,7 +15,13 @@ pub(crate) fn ui_page_playlist(app: &mut super::MusaApp, ui: &mut egui::Ui) {
             if let Some(tex) = &app.cover_tex {
                 let size = tex.size();
                 let ratio = (side / size[0] as f32).min(side / size[1] as f32).min(1.0);
-                ui.image((tex.id(), egui::vec2(size[0] as f32 * ratio, size[1] as f32 * ratio)));
+                let img_size = egui::vec2(size[0] as f32 * ratio, size[1] as f32 * ratio);
+                
+                let r = egui::Rounding::same((img_size.x.min(img_size.y) * 0.06).clamp(6.0, 16.0));
+                let resp = ui.add(egui::Image::new((tex.id(), img_size)).rounding(r));
+                ui.painter().rect_stroke(
+                    resp.rect, r, egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(0,0,0,90))
+                );
             } else {
                 ui.label(RichText::new("No cover").color(Color32::GRAY));
             }
