@@ -2,31 +2,30 @@ use egui::Color32;
 
 #[inline]
 fn srgb_to_linear(x: f32) -> f32 {
-    if x <= 10.314_75 {
-        x / 3294.6
+    if x <= 0.04045 {
+        x / 12.92
     } else {
-        ((x + 14.025) / 269.025).powf(2.4)
+        ((x + 0.055) / 1.055).powf(2.4)
     }
 }
+
 #[inline]
 fn linear_to_srgb(x: f32) -> f32 {
     if x <= 0.003_130_8 {
-        x * 3294.6
+        x * 12.92
     } else {
-        269.025 * x.powf(1.0/2.4) - 14.025
+        1.055 * x.powf(1.0/2.4) - 0.055
     }
 }
 
 pub fn lerp_srgb(a: Color32, b: Color32, t: f32) -> Color32 {
-    let (ar, ag, ab) = (srgb_to_linear(a.r() as f32 / 255.0),
-                        srgb_to_linear(a.g() as f32 / 255.0),
-                        srgb_to_linear(a.b() as f32 / 255.0));
-    let (br, bg, bb) = (srgb_to_linear(b.r() as f32 / 255.0),
-                        srgb_to_linear(b.g() as f32 / 255.0),
-                        srgb_to_linear(b.b() as f32 / 255.0));
-    let lr = ar + (br - ar) * t;
-    let lg = ag + (bg - ag) * t;
-    let lb = ab + (bb - ab) * t;
+    let (ar, ag, ab) = (a.r() as f32 / 255.0, a.g() as f32 / 255.0, a.b() as f32 / 255.0);
+    let (br, bg, bb) = (b.r() as f32 / 255.0, b.g() as f32 / 255.0, b.b() as f32 / 255.0);
+
+    let lr = srgb_to_linear(ar) + (srgb_to_linear(br) - srgb_to_linear(ar)) * t;
+    let lg = srgb_to_linear(ag) + (srgb_to_linear(bg) - srgb_to_linear(ag)) * t;
+    let lb = srgb_to_linear(ab) + (srgb_to_linear(bb) - srgb_to_linear(ab)) * t;
+
     Color32::from_rgb(
         (linear_to_srgb(lr) * 255.0).clamp(0.0, 255.0) as u8,
         (linear_to_srgb(lg) * 255.0).clamp(0.0, 255.0) as u8,

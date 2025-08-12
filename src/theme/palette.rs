@@ -1,9 +1,5 @@
 use egui::Color32;
-use rand_pcg::Pcg32;
-use rand::{
-    Rng,
-    SeedableRng
-};
+use fastrand::Rng;
 use image::{
     DynamicImage,
     GenericImageView,
@@ -50,15 +46,15 @@ pub fn extract_palette(img: &DynamicImage, k: usize) -> [Color32; 3] {
         samples.truncate(4096);
     }
 
-    let mut rng = Pcg32::seed_from_u64(0xCAFEBABE);
+    let mut rng = Rng::with_seed(0xCAFEBABE_u64);
     let mut centers: Vec<[f32; 3]> = Vec::with_capacity(k);
-    centers.push(samples[rng.gen_range(0..samples.len())]);
+    centers.push(samples[rng.usize(0..samples.len())]);
     while centers.len() < k {
         let dists: Vec<f32> = samples.iter().map(|c| {
             centers.iter().map(|m| sqr_dist(*c, *m)).fold(f32::INFINITY, f32::min)
         }).collect();
         let sum: f32 = dists.iter().sum::<f32>().max(1.0);
-        let mut pick = rng.gen::<f32>() * sum;
+        let mut pick = rng.f32() * sum;
         let mut idx = 0;
         for (i, d) in dists.iter().enumerate() {
             if pick <= *d {

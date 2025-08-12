@@ -1,11 +1,12 @@
 use anyhow::anyhow;
-use walkdir::WalkDir;
 use crate::util::is_audio_file;
-use std::path::{
-    Path,
-    PathBuf
+use std::{
+    fs,
+    path::{
+        Path,
+        PathBuf
+    }
 };
-
 
 #[derive(Clone)]
 pub struct Track {
@@ -27,6 +28,27 @@ impl Track {
     }
 }
 
+fn collect_audio_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    if let Ok(read_dir) = fs::read_dir(dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_dir () {
+                    if !ft.is_symlink() {
+                        collect_audio_files(&path, files);
+                    }
+                } else if ft.is_file() {
+                    if is_audio_file(&path) {
+                        if let Ok(abs) = path.canonicalize() {
+                            files.push(abs);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn scan_tracks(root: &Path) -> anyhow::Result<Vec<Track>> {
     if !root.exists() {
         return Err(anyhow!("Path does not exist: {}", root.display()));
@@ -37,12 +59,7 @@ pub fn scan_tracks(root: &Path) -> anyhow::Result<Vec<Track>> {
             files.push(root.canonicalize()?);
         }
     } else {
-        for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-            let p = entry.path();
-            if p.is_file() && is_audio_file(p) {
-                files.push(p.canonicalize()?);
-            }
-        }
+        collect_audio_files(root, &mut files);
     }
     if files.is_empty() {
         return Err(anyhow!("No audio files in {}", root.display()));

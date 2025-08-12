@@ -11,16 +11,13 @@ wgpu = ["eframe/wgpu"]
 [dependencies]
 regex = "1"
 anyhow = "1"
-rand = "0.8"
-egui = "0.27"
-walkdir = "2"
-image = "0.25"
-rand_pcg = "0.3"
+fastrand = "2"
 audiotags = "0.5"
-rodio = { version = "0.17", features = ["symphonia-all"] }
-eframe = { version = "0.27", default-features = false, features = ["glow"] }
+eframe = { version = "0.27", default-features = false }
+rodio = { version = "0.17", default-features = false, features = ["symphonia"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+egui = { version = "0.27", default-features = false, features = ["default_fonts"] }
 
-symphonia = { version = "0.5", features = [
-  "aac", "alac", "flac", "vorbis", "mp3", "isomp4",
-  "ogg", "wav", "pcm", "mkv"
+symphonia = { version = "0.5", default-features = false, features = [
+  "flac", "isomp4", "vorbis", "mp3", "ogg", "wav", "pcm"
 ] }
