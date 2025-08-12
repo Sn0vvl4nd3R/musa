@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::widgets::draw_icon_repeat;
 use crate::app::cover::update_cover_from_current_track;
 use egui::{
     Color32,
@@ -47,7 +48,8 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
     let prev_d: f32 = 40.0;
     let play_d: f32 = 48.0;
     let next_d: f32 = 40.0;
-    let center_block_w = prev_d + play_d + next_d + gap * 2.0;
+    let rep_d: f32 = 36.0;
+    let center_block_w = prev_d + play_d + next_d + rep_d + gap * 2.0;
     let vol_w: f32 = ui.available_width().min(320.0).max(180.0);
     let row2_h = play_d.max(30.0);
 
@@ -95,6 +97,26 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
                 } else {
                     update_cover_from_current_track(app);
                 }
+            }
+
+            ui.add_space(gap);
+
+            let rep_tip = if app.player.repeat_one {
+                "Repeat this track: ON"
+            } else {
+                "Repeat this track: OFF"
+            };
+
+            let rep_resp = icon_button_circle(ui, rep_d, rep_tip, |p, r, c| {
+                let col = if app.player.repeat_one {
+                    app.accent
+                } else {
+                    c
+                };
+                draw_icon_repeat(p, r, col, app.player.repeat_one);
+            });
+            if rep_resp.clicked() {
+                app.player.toggle_repeat_one();
             }
 
             let used = left_pad + center_block_w + gap;

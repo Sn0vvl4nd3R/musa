@@ -25,6 +25,7 @@ pub struct Player {
     pub index: usize,
     pub volume: f32,
     pub track_total: Option<Duration>,
+    pub repeat_one: bool,
 
     pub(crate) pos_base: Duration,
     pub(crate) pos_started_at: Option<Instant>,
@@ -42,6 +43,7 @@ impl Player {
             index: 0,
             volume: 1.0,
             track_total: None,
+            repeat_one: false,
             pos_base: Duration::ZERO,
             pos_started_at: None,
             vis_buf: VisBuffer::new(96_000),
@@ -73,5 +75,8 @@ impl Player {
     }
     pub fn vis_buffer(&self) -> Arc<VisBuffer> {
         self.vis_buf.clone()
+    }
+    pub fn toggle_repeat_one(&mut self) {
+        self.repeat_one = !self.repeat_one;
     }
 }

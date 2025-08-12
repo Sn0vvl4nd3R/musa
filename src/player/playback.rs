@@ -81,8 +81,12 @@ impl Player {
     pub fn auto_advance_if_needed(&mut self) -> Result<()> {
         if let Some(s) = &self.sink {
             if s.empty() && !self.playlist.is_empty() {
-                self.index = (self.index + 1) % self.playlist.len();
-                return self.play_current();
+                if self.repeat_one {
+                    return self.play_current();
+                } else {
+                    self.index = (self.index + 1) % self.playlist.len();
+                    return self.play_current();
+                }
             }
         }
         Ok(())
