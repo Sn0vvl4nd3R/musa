@@ -7,8 +7,11 @@ use egui::{
 use crate::{
     app::cover::update_cover_from_current_track,
     ui::widgets::{
+        seekbar,
         volume_slider,
-        draw_icon_repeat
+        draw_icon_repeat,
+        draw_icon_shuffle,
+        icon_button_circle
     }
 };
 
@@ -20,9 +23,9 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
         pos = total;
     }
 
-    let time_w: f32 = 54.0;
-    let gap: f32 = 8.0;
-    let row1_h: f32 = 22.0;
+    let time_w: f32 = app.cfg.ui.seek.time_width;
+    let gap: f32 = app.cfg.ui.gap;
+    let row1_h: f32 = app.cfg.ui.seek.height;
     let row1_w = ui.available_width();
 
     ui.allocate_ui_with_layout(
@@ -37,7 +40,7 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
             ui.add_space(gap);
 
             let seek_w = (row1_w - time_w * 2.0 - gap * 2.0).max(80.0);
-            if let Some(new_secs) = seekbar(ui, pos, total, seek_w, 14.0, app.accent) {
+            if let Some(new_secs) = seekbar(ui, pos, total, seek_w, &app.cfg.ui.seek, app.accent) {
                 if let Err(e) = app.player.seek_to_secs(new_secs) {
                     app.status = format!("Seek error: {e}");
                 }
@@ -55,15 +58,16 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
         },
     );
 
-    ui.add_space(6.0);
+    ui.add_space(app.cfg.ui.gap_small);
 
-    let prev_d: f32 = 40.0;
-    let play_d: f32 = 48.0;
-    let next_d: f32 = 40.0;
-    let rep_d: f32 = 36.0;
-    let row2_h = play_d.max(28.0);
+    let prev_d: f32 = app.cfg.ui.controls.prev_d;
+    let play_d: f32 = app.cfg.ui.controls.play_d;
+    let next_d: f32 = app.cfg.ui.controls.next_d;
+    let rep_d: f32 = app.cfg.ui.controls.repeat_d;
+    let shuf_d: f32 = app.cfg.ui.controls.shuffle_d;
+    let row2_h: f32 = play_d.max(app.cfg.ui.controls.row_min_h);
 
-    let center_block_w = prev_d + play_d + next_d + rep_d + gap * 3.0;
+    let center_block_w = shuf_d + prev_d + play_d + next_d + rep_d + gap * 3.0;
 
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), row2_h),
@@ -73,6 +77,25 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
                 cols[0].allocate_ui(egui::vec2(0.0, 0.0), |_ui| {});
 
                 cols[1].with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let shuf_tip = if app.player.shuffle {
+                        "Shuffle: ON"
+                    } else {
+                        "Shuffle: OFF"
+                    };
+                    let shuf_resp = icon_button_circle(ui, shuf_d, shuf_tip, |p, r, c| {
+                        let col = if app.player.shuffle {
+                            app.accent
+                        } else {
+                            c
+                        };
+                        draw_icon_shuffle(p, r, col);
+                    });
+                    if shuf_resp.clicked() {
+                        app.player.toggle_shuffle();
+                    }
+
+                    ui.add_space(gap);
+
                     let pad = ((ui.available_width() - center_block_w) * 0.5).max(0.0);
                     ui.add_space(pad);
 
@@ -140,8 +163,9 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
                     ui.add_space(80.0);
 
                     let mut vol = app.player.volume;
-                    let vol_w = (ui.available_width() * 0.18).clamp(90.0, 140.0);
-                    let _ = volume_slider(ui, &mut vol, vol_w, app.accent);
+                    let vol_w = (ui.available_width() * app.cfg.ui.volume.width_frac_right)
+                        .clamp(app.cfg.ui.volume.width_min, app.cfg.ui.volume.width_max);
+                    let _ = volume_slider(ui, &mut vol, vol_w, app.accent, &app.cfg.ui.volume);
 
                     if (vol - app.player.volume).abs() > f32::EPSILON {
                         app.player.set_volume(vol);

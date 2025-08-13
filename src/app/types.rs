@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UiView {
+    Settings,
     Browser,
     Player,
     Playlist,

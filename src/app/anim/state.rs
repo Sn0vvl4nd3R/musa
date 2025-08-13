@@ -73,7 +73,7 @@ pub fn begin_theme_anim(app: &mut MusaApp, to_bg: [Color32; 3], to_accent: Color
     app.anim.to_header = title_from_accent(to_accent);
 
     app.anim.start = std::time::Instant::now();
-    app.anim.dur = std::time::Duration::from_millis(420);
+    app.anim.dur = std::time::Duration::from_millis(app.cfg.anim.theme_ms);
     app.anim.active = true;
 }
 

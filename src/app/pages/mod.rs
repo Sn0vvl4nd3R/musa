@@ -1,15 +1,27 @@
 use super::*;
-use egui::Color32;
 use crate::util::home_dir;
+use crate::config::Config;
 
-pub mod player;
+pub mod settings;
 pub mod browser;
+pub mod player;
 pub mod playlist;
 
-pub(super) fn new_app() -> anyhow::Result<super::MusaApp> {
+pub(super) fn new_app(cfg: Config) -> anyhow::Result<super::MusaApp> {
     let start_dir = home_dir();
+
+    let accent = cfg.accent_color32();
+    let bg_init = crate::theme::make_gradient_stops(cfg.bg_stops_color32());
+    let vis_points = cfg.visualizer.n_points;
+    let init_volume = cfg.player.initial_volume;
+
+    let mut player = crate::player::Player::new();
+    player.volume = init_volume;
+
     Ok(super::MusaApp {
-        player: crate::player::Player::new(),
+        cfg,
+        player,
+
         view: super::UiView::Player,
         status: String::new(),
         current_dir: start_dir.clone(),
@@ -21,20 +33,16 @@ pub(super) fn new_app() -> anyhow::Result<super::MusaApp> {
         cover_tex: None,
         cover_rx: None,
 
-        bg_colors: crate::theme::make_gradient_stops([
-            Color32::from_rgb(36,36,40),
-            Color32::from_rgb(24,24,28),
-            Color32::from_rgb(12,12,14),
-        ]),
-        accent: Color32::from_rgb(120,160,255),
-        title_color: crate::theme::title_from_accent(Color32::from_rgb(120,160,255)),
-        header_color: crate::theme::title_from_accent(Color32::from_rgb(120,160,255)),
+        bg_colors: bg_init,
+        accent,
+        title_color: crate::theme::title_from_accent(accent),
+        header_color: crate::theme::title_from_accent(accent),
 
         anim: super::anim::ThemeAnim::new(),
 
         scan_rx: None,
 
-        vis_draw: vec![0.0; 120],
+        vis_draw: vec![0.0; vis_points],
         vis_fast: Vec::new(),
         vis_slow: Vec::new(),
         vis_vals: Vec::new(),
@@ -42,7 +50,7 @@ pub(super) fn new_app() -> anyhow::Result<super::MusaApp> {
         vis_pts: Vec::new(),
 
         last_frame: std::time::Instant::now(),
-        dt_sec: 1.0/60.0,
+        dt_sec: 1.0 / 60.0,
 
         agc_env: 0.05,
         agc_gain: 1.0,

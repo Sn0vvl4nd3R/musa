@@ -13,10 +13,6 @@ use crate::app::anim::color::{
     base_gradient
 };
 
-const VIS_GAIN: f32 = 1.28;
-const DEPTH_GAIN: f32 = 1.15;
-const FOCUS: f32 = 0.65;
-
 pub(super) fn render_mesh(
     app: &MusaApp,
     cache: &BgCache,
@@ -34,11 +30,9 @@ pub(super) fn render_mesh(
     let rows = cache.rows;
     let w_pad = cache.w_pad;
 
+    let p = &app.cfg.anim.bg;
     let mut mesh = egui::Mesh::default();
-    let nverts = cols * rows;
-    mesh.vertices.reserve_exact(nverts);
-
-    let warp_v = VIS_GAIN * (0.026 + 0.040 * music);
+    mesh.vertices.reserve_exact(cols * rows);
 
     for j in 0..rows {
         let v = cache.v[j];
@@ -59,13 +53,15 @@ pub(super) fn render_mesh(
 
             let drift = a_warp * u + b_warp * v + c_warp;
             let iso_for_vrp = (iso_c - drift - cache.row_bias[j]) * 0.95;
+
+            let warp_v = p.vis_gain * (p.warp_base + p.warp_music * music);
             let vv = mirror01(v + iso_for_vrp * warp_v);
 
             let base = base_gradient(vv, app);
             let (mut h, s, mut val) = rgb_to_hsv(base);
 
-            let nxn = -ddu * DEPTH_GAIN * (0.85 + 0.30 * music);
-            let nyn = -ddv * DEPTH_GAIN * (0.85 + 0.30 * music);
+            let nxn = -ddu * p.depth_gain * (0.85 + 0.30 * music);
+            let nyn = -ddv * p.depth_gain * (0.85 + 0.30 * music);
             let nzn = 1.0;
             let inv = 1.0 / (nxn * nxn + nyn * nyn + nzn * nzn).sqrt();
             let nxn = nxn * inv; let nyn = nyn * inv; let nzn = nzn * inv;
@@ -77,10 +73,10 @@ pub(super) fn render_mesh(
             let dy = v - 0.5;
             let r = (dx * dx + dy * dy).sqrt();
             let center = smoothstep_inv(0.30, 0.85, r);
-            let focus  = center * FOCUS + (1.0 - center) * (1.0 - FOCUS);
+            let focus = center * p.focus + (1.0 - center) * (1.0 - p.focus);
 
-            let vol = VIS_GAIN * (0.18 + 0.10 * music) * focus;
-            let lift = (lambert - 0.5) * 0.8 + rim * 0.12;
+            let vol  = p.vis_gain * (p.vol_base + p.vol_music * music) * focus;
+            let lift = (lambert - 0.5) * p.lambert_gain + rim * p.rim_gain;
             val = (val + vol * lift).clamp(0.0, 1.0);
 
             let mut dh = h_acc - h;
@@ -90,7 +86,7 @@ pub(super) fn render_mesh(
             if dh < -180.0 {
                 dh += 360.0;
             }
-            h = (h + dh * 0.035 * focus).rem_euclid(360.0);
+            h = (h + dh * p.hue_follow * focus).rem_euclid(360.0);
 
             let col = hsv_to_rgb(h, s, val);
             mesh.colored_vertex(egui::pos2(x, y), col);

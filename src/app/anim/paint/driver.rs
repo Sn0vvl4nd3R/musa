@@ -28,13 +28,27 @@ pub fn paint_bg_gradient(ctx: &egui::Context, app: &MusaApp) {
 
     let p_main = make_params(seed);
     let p_detail = make_params(seed ^ 0xDEAD_BEEF);
-    let t = time_now();
 
-    let music = {
+    let bg = &app.cfg.anim.bg;
+    let t = if bg.enabled {
+        time_now()
+    } else {
+        0.0
+    };
+
+    let raw_music = {
         let raw = app.player.vis_buffer().take_recent(2048);
         if raw.len() >= 256 {
             let samp: Vec<f32> = raw.iter().step_by(8).map(|x| x.abs()).collect();
             (p90_abs(samp) * 1.6).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    };
+
+    let music = {
+        if bg.enabled {
+            raw_music * bg.music_amount
         } else {
             0.0
         }

@@ -26,8 +26,10 @@ pub struct Player {
     pub volume: f32,
     pub track_total: Option<Duration>,
     pub repeat_one: bool,
+    pub shuffle: bool,
 
     pub(crate) pos_base: Duration,
+    pub(crate) history: Vec<usize>,
     pub(crate) pos_started_at: Option<Instant>,
 
     vis_buf: Arc<VisBuffer>,
@@ -44,6 +46,8 @@ impl Player {
             volume: 1.0,
             track_total: None,
             repeat_one: false,
+            shuffle: false,
+            history: Vec::new(),
             pos_base: Duration::ZERO,
             pos_started_at: None,
             vis_buf: VisBuffer::new(96_000),
@@ -78,5 +82,11 @@ impl Player {
     }
     pub fn toggle_repeat_one(&mut self) {
         self.repeat_one = !self.repeat_one;
+    }
+    pub fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+        if !self.shuffle {
+            self.history.clear();
+        }
     }
 }

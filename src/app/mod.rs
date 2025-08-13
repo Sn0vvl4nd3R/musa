@@ -15,14 +15,13 @@ use std::{
 
 use crate::{
     player::Player,
+    config::Config,
     theme::apply_visuals,
     ui::widgets::{
-        seekbar,
         draw_icon_play,
         draw_icon_prev,
         draw_icon_next,
         draw_icon_pause,
-        icon_button_circle
     },
 };
 
@@ -42,6 +41,7 @@ pub use types::{
 };
 
 pub struct MusaApp {
+    pub cfg: Config,
     pub player: Player,
     view: UiView,
     status: String,
@@ -97,8 +97,8 @@ pub struct MusaApp {
 }
 
 impl MusaApp {
-    pub fn new() -> Result<Self> {
-        pages::new_app()
+    pub fn new(cfg: Config) -> Result<Self> {
+        pages::new_app(cfg)
     }
 }
 
@@ -165,10 +165,13 @@ impl App for MusaApp {
         egui::TopBottomPanel::bottom("musa_bottom")
             .frame(egui::Frame::none())
             .resizable(false)
-            .exact_height(84.0)
+            .exact_height(self.cfg.ui.bottom_bar_h)
             .show(ctx, |ui| controls::bottom_controls(self, ui));
 
-        egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| match self.view {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none())
+            .show(ctx, |ui| match self.view {
+            UiView::Settings => pages::settings::ui_page_settings(self, ui),
             UiView::Browser => pages::browser::ui_page_browser(self, ui),
             UiView::Player => pages::player::ui_page_player(self, ui),
             UiView::Playlist => pages::playlist::ui_page_playlist(self, ui),

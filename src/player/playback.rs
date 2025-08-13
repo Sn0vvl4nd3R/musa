@@ -62,6 +62,19 @@ impl Player {
         if self.playlist.is_empty() {
             return Ok(());
         }
+
+        if self.shuffle {
+            if self.playlist.len() > 1 {
+                self.history.push(self.index);
+                let mut idx = self.index;
+                while idx == self.index {
+                    idx = fastrand::usize(0..self.playlist.len());
+                }
+                self.index = idx;
+            }
+            return self.play_current();
+        }
+
         self.index = (self.index + 1) % self.playlist.len();
         self.play_current()
     }
@@ -70,6 +83,14 @@ impl Player {
         if self.playlist.is_empty() {
             return Ok(());
         }
+
+        if self.shuffle {
+            if let Some(prev_idx) = self.history.pop() {
+                self.index = prev_idx;
+                return self.play_current();
+            }
+        }
+
         self.index = if self.index == 0 {
             self.playlist.len() - 1
         } else {
@@ -84,8 +105,7 @@ impl Player {
                 if self.repeat_one {
                     return self.play_current();
                 } else {
-                    self.index = (self.index + 1) % self.playlist.len();
-                    return self.play_current();
+                    return self.next();
                 }
             }
         }

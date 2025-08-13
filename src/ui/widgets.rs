@@ -2,6 +2,10 @@ use eframe::egui::{
     self,
     Color32,
 };
+use crate::config:: {
+    SeekbarCfg,
+    VolumeSliderCfg
+};
 
 pub fn icon_button_circle(
     ui: &mut egui::Ui,
@@ -168,12 +172,13 @@ pub fn volume_slider(
     value: &mut f32,
     width: f32,
     accent: Color32,
+    style: &VolumeSliderCfg,
 ) -> egui::Response {
-    let h = 8.0;
+    let h = style.height;
     let r = h * 0.5;
 
     let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(width.max(90.0), h),
+        egui::vec2(width.max(style.width_min), h),
         egui::Sense::click_and_drag(),
     );
     ui.expand_to_include_rect(rect);
@@ -186,15 +191,15 @@ pub fn volume_slider(
     painter.rect_filled(rect, r, bg);
     painter.rect_stroke(rect, r, egui::Stroke::new(1.0, border));
 
-    let frac = (*value / 2.0).clamp(0.0, 1.0);
+    let frac = (*value / style.max_value).clamp(0.0, 1.0);
     let w = rect.left() + rect.width() * frac;
     let filled = egui::Rect::from_min_max(rect.min, egui::pos2(w, rect.bottom()));
     painter.rect_filled(filled, r, accent);
 
     let knob_r = if resp.hovered() || resp.dragged() {
-        4.8
+        style.knob_r_hover
     } else {
-        4.0
+        style.knob_r
     };
     let center = egui::pos2(w, rect.center().y);
     painter.circle_filled(center, knob_r, accent);
@@ -203,10 +208,52 @@ pub fn volume_slider(
     if (resp.clicked() || resp.dragged()) && rect.width() > 0.0 {
         if let Some(p) = resp.interact_pointer_pos() {
             let frac = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-            *value = 2.0 * frac;
+            *value = style.max_value * frac;
         }
     }
     resp
+}
+pub fn draw_icon_shuffle(p: &egui::Painter, r: egui::Rect, color: Color32) {
+    let rr = r.shrink(r.width() * 0.18);
+    let w = rr.width();
+    let h = rr.height();
+    let cy = rr.center().y;
+    let x0 = rr.left();
+    let x1 = rr.right();
+
+    let stroke = egui::Stroke::new((w * 0.08).clamp(1.5, 2.2), color);
+
+    let y_t0 = cy - h * 0.22;
+    let y_t1 = cy + h * 0.18;
+    let top = vec![
+        egui::pos2(x0, y_t0),
+        egui::pos2(x0 + w * 0.30, y_t0),
+        egui::pos2(x0 + w * 0.55, y_t1),
+        egui::pos2(x1 - w * 0.18, y_t1),
+    ];
+    p.add(egui::Shape::line(top, stroke));
+
+    let y_b0 = cy + h * 0.22;
+    let y_b1 = cy - h * 0.18;
+    let bot = vec![
+        egui::pos2(x0, y_b0),
+        egui::pos2(x0 + w * 0.30, y_b0),
+        egui::pos2(x0 + w * 0.55, y_b1),
+        egui::pos2(x1 - w * 0.18, y_b1),
+    ];
+    p.add(egui::Shape::line(bot, stroke));
+
+    let arrow = |y: f32| {
+        let tip = egui::pos2(x1, y);
+        let len = w * 0.16;
+        let wid = h * 0.20;
+        let base = egui::pos2(x1 - len, y);
+        let b1 = egui::pos2(base.x, base.y - wid * 0.5);
+        let b2 = egui::pos2(base.x, base.y + wid * 0.5);
+        p.add(egui::Shape::convex_polygon(vec![tip, b1, b2], color, egui::Stroke::new(0.0, color)));
+    };
+    arrow(y_t1);
+    arrow(y_b1);
 }
 
 pub fn seekbar(
@@ -214,7 +261,7 @@ pub fn seekbar(
     pos: f32,
     total: f32,
     width: f32,
-    height: f32,
+    style: &SeekbarCfg,
     accent: Color32,
 ) -> Option<f32> {
     let have_total = total.is_finite() && total > 0.0;
@@ -223,7 +270,7 @@ pub fn seekbar(
     } else {
         egui::Sense::hover()
     };
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width.max(60.0), height), sense);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width.max(60.0), style.height), sense);
     ui.expand_to_include_rect(rect);
 
     let painter = ui.painter_at(rect);
@@ -235,8 +282,10 @@ pub fn seekbar(
         Color32::from_gray(110)
     };
 
-    painter.rect_filled(rect, 6.0, bg);
-    painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0, border));
+    let r = style.height * 0.5;
+
+    painter.rect_filled(rect, r, bg);
+    painter.rect_stroke(rect, r, egui::Stroke::new(1.0, border));
 
     let frac = if have_total {
         (pos / total).clamp(0.0, 1.0)
@@ -249,14 +298,14 @@ pub fn seekbar(
 
     if have_total {
         let hover = resp.hovered() || resp.dragged();
-        let r = if hover {
-            7.5
+        let knob_r = if hover {
+            style.knob_r_hover
         } else {
-            6.5
+            style.knob_r
         };
         let center = egui::pos2(w, rect.center().y);
-        painter.circle_filled(center, r, accent);
-        painter.circle_stroke(center, r, egui::Stroke::new(1.0, border));
+        painter.circle_filled(center, knob_r, accent);
+        painter.circle_stroke(center, knob_r, egui::Stroke::new(1.0, border));
 
         if resp.clicked() || resp.dragged() {
             if let Some(p) = resp.interact_pointer_pos() {

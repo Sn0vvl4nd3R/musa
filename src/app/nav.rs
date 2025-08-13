@@ -8,6 +8,7 @@ pub(super) fn nav_tabs(app: &mut super::MusaApp, ui: &mut egui::Ui) {
                 app.view = v;
             }
         };
+        tab("Settings", UiView::Settings);
         tab("Browser", UiView::Browser);
         tab("Player", UiView::Player);
         tab("Playlist", UiView::Playlist);
