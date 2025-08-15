@@ -31,7 +31,9 @@ fn p90_in_place(buf: &mut [f32]) -> f32 {
 pub(crate) fn draw_visualizer_bg(app: &mut super::MusaApp, ui: &mut egui::Ui, dt: f32) {
     let full = ui.max_rect();
 
-    let band_h = (full.height() * 0.28).clamp(80.0, 200.0);
+    let cfgv = &app.cfg.visualizer;
+    let band_h = (full.height() * cfgv.band_h_ratio)
+        .clamp(cfgv.band_h_min, cfgv.band_h_max);
     let band = egui::Rect::from_min_max(
         egui::pos2(full.left() + 12.0, full.bottom() - band_h - 12.0),
         egui::pos2(full.right() - 12.0, full.bottom() - 12.0),

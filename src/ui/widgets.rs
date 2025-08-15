@@ -294,7 +294,7 @@ pub fn seekbar(
     };
     let w = rect.left() + rect.width() * frac;
     let played_rect = egui::Rect::from_min_max(rect.min, egui::pos2(w, rect.bottom()));
-    painter.rect_filled(played_rect, 6.0, played);
+    painter.rect_filled(played_rect, r, played);
 
     if have_total {
         let hover = resp.hovered() || resp.dragged();

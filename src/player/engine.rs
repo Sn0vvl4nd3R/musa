@@ -27,6 +27,8 @@ pub struct Player {
     pub track_total: Option<Duration>,
     pub repeat_one: bool,
     pub shuffle: bool,
+    pub(crate) bag: Vec<usize>,
+    pub(crate) bag_pos: usize,
 
     pub(crate) pos_base: Duration,
     pub(crate) history: Vec<usize>,
@@ -47,6 +49,8 @@ impl Player {
             track_total: None,
             repeat_one: false,
             shuffle: false,
+            bag: Vec::new(),
+            bag_pos: 0,
             history: Vec::new(),
             pos_base: Duration::ZERO,
             pos_started_at: None,
@@ -82,11 +86,5 @@ impl Player {
     }
     pub fn toggle_repeat_one(&mut self) {
         self.repeat_one = !self.repeat_one;
-    }
-    pub fn toggle_shuffle(&mut self) {
-        self.shuffle = !self.shuffle;
-        if !self.shuffle {
-            self.history.clear();
-        }
     }
 }

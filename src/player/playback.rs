@@ -58,20 +58,51 @@ impl Player {
         self.play_current_from(Duration::from_secs_f32(secs))
     }
 
+    fn rebuild_bag(&mut self) {
+        if self.playlist.is_empty() {
+            self.bag.clear();
+            self.bag_pos = 0;
+            return
+        }
+        self.bag = (0..self.playlist.len()).collect();
+
+        if self.bag.len() > 1 {
+            let cur = self.index;
+            if let Some(pos) = self.bag.iter().position(|&i| i == cur) {
+                self.bag.swap_remove(pos);
+                self.bag.push(cur);
+            }
+        }
+        fastrand::shuffle(&mut self.bag);
+        self.bag_pos = 0;
+    }
+
+    pub fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+        self.history.clear();
+        if self.shuffle {
+            self.rebuild_bag();
+        }
+    }
+
     pub fn next(&mut self) -> Result<()> {
         if self.playlist.is_empty() {
             return Ok(());
         }
 
         if self.shuffle {
-            if self.playlist.len() > 1 {
-                self.history.push(self.index);
-                let mut idx = self.index;
-                while idx == self.index {
-                    idx = fastrand::usize(0..self.playlist.len());
-                }
-                self.index = idx;
+            if self.bag.is_empty() || self.bag_pos >= self.bag.len() {
+                self.rebuild_bag();
             }
+
+            let mut idx = self.bag[self.bag_pos];
+            self.bag_pos += 1;
+            if idx == self.index && self.bag_pos < self.bag.len() {
+                idx = self.bag[self.bag_pos];
+                self.bag_pos += 1;
+            }
+            self.history.push(self.index);
+            self.index = idx;
             return self.play_current();
         }
 
