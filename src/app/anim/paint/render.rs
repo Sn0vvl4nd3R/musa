@@ -7,10 +7,12 @@ use super::math::{
     smoothstep_inv
 };
 
-use crate::app::anim::color::{
-    rgb_to_hsv,
-    hsv_to_rgb,
-    base_gradient
+use crate::{
+    app::anim::color::base_gradient,
+    theme::{
+        rgb_to_hsv,
+        hsv_to_rgb,
+    }
 };
 
 pub(super) fn render_mesh(

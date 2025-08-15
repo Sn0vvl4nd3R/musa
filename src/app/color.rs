@@ -18,10 +18,35 @@ fn rel_luminance(c: Color32) -> f32 {
 }
 
 #[inline]
-pub(crate) fn best_on(c: Color32) -> Color32 {
-    if rel_luminance(c) > 0.5 {
-        Color32::from_rgb(5,5,7)
+fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    let (l1, l2) = (rel_luminance(a), rel_luminance(b));
+    let (hi, lo) = if l1 > l2 {
+        (l1, l2)
     } else {
-        Color32::WHITE
+        (l2, l1)
+    };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+#[inline]
+pub(crate) fn best_on(bg: Color32) -> Color32 {
+    let light = Color32::from_rgb(250, 250, 252);
+    let dark = Color32::from_rgb(10, 10, 12);
+
+    let cl = contrast_ratio(light, bg);
+    let cd = contrast_ratio(dark, bg);
+
+    if cl >= 4.5 || cd >= 4.5 {
+        if cl >= cd {
+            light
+        } else {
+            dark
+        }
+    } else {
+        if cl >= cd {
+            light
+        } else {
+            dark
+        }
     }
 }

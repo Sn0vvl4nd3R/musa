@@ -9,13 +9,15 @@ use super::{
     surface::compute_plane_and_bias,
 };
 
-use crate::app::anim::{
-    flow::make_params,
-    color::rgb_to_hsv,
-    time_rng::{
-        rand01,
-        time_now
-    },
+use crate::{
+    theme::rgb_to_hsv,
+    app::anim::{
+        flow::make_params,
+        time_rng::{
+            rand01,
+            time_now
+        }
+    }
 };
 
 pub fn paint_bg_gradient(ctx: &egui::Context, app: &MusaApp) {
