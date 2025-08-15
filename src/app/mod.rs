@@ -105,6 +105,30 @@ impl MusaApp {
 impl App for MusaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
         let now = std::time::Instant::now();
+
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::Space) {
+                self.player.toggle_pause();
+            }
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                if let Err(e) = self.player.prev() {
+                    self.status = format!("Prev error: {e}");
+                }
+            }
+            if i.key_pressed(egui::Key::ArrowRight) {
+                if let Err(e) = self.player.next() {
+                    self.status = format!("Next error: {e}");
+                }
+            }
+            if i.key_pressed(egui::Key::ArrowUp) {
+                let maxv = self.cfg.ui.volume.max_value;
+                self.player.set_volume((self.player.volume + 0.05).min(maxv));
+            }
+            if i.key_pressed(egui::Key::ArrowDown) {
+                self.player.set_volume((self.player.volume - 0.05).max(0.0));
+            }
+        });
+
         self.dt_sec = (now - self.last_frame).as_secs_f32().clamp(0.001, 0.05);
         self.last_frame = now;
         self.bg_time += self.dt_sec;
