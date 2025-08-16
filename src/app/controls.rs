@@ -77,6 +77,10 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
                 cols[0].allocate_ui(egui::vec2(0.0, 0.0), |_ui| {});
 
                 cols[1].with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+
+                    let pad = ((ui.available_width() - center_block_w) * 0.5).max(0.0);
+                    ui.add_space(pad);
+
                     let shuf_tip = if app.player.shuffle {
                         "Shuffle: ON"
                     } else {
@@ -95,9 +99,6 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
                     }
 
                     ui.add_space(gap);
-
-                    let pad = ((ui.available_width() - center_block_w) * 0.5).max(0.0);
-                    ui.add_space(pad);
 
                     let prev_resp = icon_button_circle(ui, prev_d, "Previous track", |p, r, c| draw_icon_prev(p, r, c));
                     if prev_resp.clicked() {

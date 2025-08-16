@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use crate::util::is_audio_file;
 use std::{
     fs,
+    time::Duration,
     path::{
         Path,
         PathBuf
@@ -17,6 +18,7 @@ pub struct Track {
     pub album_dir: PathBuf,
     pub track_no: Option<u32>,
     pub disc_no: Option<u32>,
+    pub duration: Option<Duration>,
 }
 
 impl Track {
@@ -94,6 +96,8 @@ pub fn scan_tracks(root: &Path) -> anyhow::Result<Vec<Track>> {
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
 
+        let duration = crate::duration::probed_duration(&path);
+
         out.push(Track {
             path,
             title,
@@ -101,7 +105,8 @@ pub fn scan_tracks(root: &Path) -> anyhow::Result<Vec<Track>> {
             album,
             album_dir,
             track_no: m.track_no,
-            disc_no:  m.disc_no,
+            disc_no: m.disc_no,
+            duration,
         });
     }
 

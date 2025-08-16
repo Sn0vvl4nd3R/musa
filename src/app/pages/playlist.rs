@@ -48,9 +48,25 @@ pub(crate) fn ui_page_playlist(app: &mut super::MusaApp, ui: &mut egui::Ui) {
                     txt = txt.color(on_accent).strong();
                 }
 
-                if ui.selectable_label(is_sel, txt).clicked() {
+                let resp = ui.selectable_label(is_sel, txt);
+                if resp.clicked() {
                     select_after = Some(i);
                 }
+
+                let dur_txt = t.duration
+                    .map(|d| crate::util::seconds_to_mmss(d.as_secs_f32()))
+                    .unwrap_or_else(|| "--:--".to_string());
+
+                let color = if is_sel {
+                    on_accent
+                } else {
+                    ui.style().visuals.widgets.inactive.fg_stroke.color
+                };
+                let font = egui::FontId::proportional(13.0);
+                let right_pad = 8.0;
+                let pos = egui::pos2(resp.rect.right() - right_pad, resp.rect.center().y);
+
+                ui.painter().text(pos, egui::Align2::RIGHT_CENTER, dur_txt, font, color);
             }
         });
         if let Some(i) = select_after {

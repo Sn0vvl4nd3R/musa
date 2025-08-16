@@ -96,6 +96,8 @@ pub(crate) fn ui_page_browser(app: &mut super::MusaApp, ui: &mut egui::Ui) {
             })
             .and_then(|p| p.file_name()).and_then(|s| s.to_str()).unwrap_or("").to_string();
 
+        let duration = crate::duration::probed_duration(&file);
+
         app.player.playlist = vec![Track {
             path: file.clone(),
             title,
@@ -103,7 +105,8 @@ pub(crate) fn ui_page_browser(app: &mut super::MusaApp, ui: &mut egui::Ui) {
             album,
             album_dir: album_dir.into(),
             track_no: m.track_no,
-            disc_no:  m.disc_no,
+            disc_no: m.disc_no,
+            duration,
         }];
     }
 }
