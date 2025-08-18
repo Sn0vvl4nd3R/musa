@@ -1,4 +1,3 @@
-use super::*;
 use egui::{
     Color32,
     RichText
@@ -9,9 +8,13 @@ use crate::{
     ui::widgets::{
         seekbar,
         volume_slider,
+        draw_icon_prev,
+        draw_icon_play,
+        draw_icon_next,
+        draw_icon_pause,
         draw_icon_repeat,
         draw_icon_shuffle,
-        icon_button_circle
+        icon_button_circle,
     }
 };
 
