@@ -4,6 +4,7 @@ pub mod sliders;
 
 pub use sliders::{
     seekbar,
+    SeekbarEvent,
     volume_slider
 };
 

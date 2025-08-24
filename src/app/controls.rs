@@ -7,6 +7,7 @@ use crate::{
     app::cover::update_cover_from_current_track,
     ui::widgets::{
         seekbar,
+        SeekbarEvent,
         volume_slider,
         draw_icon_prev,
         draw_icon_play,
@@ -14,7 +15,7 @@ use crate::{
         draw_icon_pause,
         draw_icon_repeat,
         draw_icon_shuffle,
-        icon_button_circle,
+        icon_button_circle
     }
 };
 
@@ -25,6 +26,7 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
     if have_total && pos > total {
         pos = total;
     }
+    let mut display_pos = pos;
 
     let time_w: f32 = app.cfg.ui.seek.time_width;
     let gap: f32 = app.cfg.ui.gap;
@@ -36,16 +38,25 @@ pub(super) fn bottom_controls(app: &mut super::MusaApp, ui: &mut egui::Ui) {
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.add_sized([time_w, row1_h], egui::Label::new(
-                RichText::new(crate::util::seconds_to_mmss(pos))
+                RichText::new(crate::util::seconds_to_mmss(display_pos))
                     .monospace().color(Color32::from_rgb(240,240,246))
             ));
 
             ui.add_space(gap);
 
             let seek_w = (row1_w - time_w * 2.0 - gap * 2.0).max(80.0);
-            if let Some(new_secs) = seekbar(ui, pos, total, seek_w, &app.cfg.ui.seek, app.accent) {
-                if let Err(e) = app.player.seek_to_secs(new_secs) {
-                    app.status = format!("Seek error: {e}");
+            if let Some(evt) = seekbar(ui, display_pos, total, seek_w, &app.cfg.ui.seek, app.accent) {
+                match evt {
+                    SeekbarEvent::Preview(sec) => {
+                        display_pos = sec;
+                    }
+                    SeekbarEvent::Commit(sec) => {
+                        if let Err(e) = app.player.seek_to_secs(sec) {
+                            app.status = format!("Seek error: {e}");
+                        } else {
+                            display_pos = sec;
+                        }
+                    }
                 }
             }
 
