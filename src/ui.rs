@@ -16,7 +16,7 @@ use crate::{
     app::{
         App, DetailView, FolderFocus, PlaybackState, ScanPhase, SearchItem, Theme, View,
     },
-    library::Track,
+    library::{DirectoryEntryKind, Track},
 };
 
 #[derive(Clone, Copy)]
@@ -264,7 +264,7 @@ impl Terminal {
         let palette = Palette::for_theme(app.theme);
         let mut canvas = Canvas::new(width, height, palette);
 
-        if width < 72 || height < 20 {
+        if width < 72 || height < 24 {
             draw_too_small(&mut canvas, palette);
         } else {
             draw_app(&mut canvas, app, palette);
@@ -319,6 +319,10 @@ fn draw_app(canvas: &mut Canvas, app: &App, palette: Palette) {
 
     if app.help_open {
         draw_help(canvas, palette);
+    } else if app.text_input.is_some() {
+        draw_text_input(canvas, app, palette);
+    } else if app.playlist_picker.is_some() {
+        draw_playlist_picker(canvas, app, palette);
     }
 }
 
@@ -354,29 +358,38 @@ fn draw_sidebar(
         );
     }
 
-    let info_y = height.saturating_sub(6);
-    canvas.text(2, info_y, "YOUR LIBRARY", width.saturating_sub(4), Style::new(palette.faint, palette.sidebar).bold());
-    canvas.text(
-        2,
-        info_y + 2,
-        &format!("{} songs", app.tracks.len()),
-        width.saturating_sub(4),
-        Style::new(palette.muted, palette.sidebar),
-    );
-    canvas.text(
-        2,
-        info_y + 3,
-        &format!("{} albums", app.albums.len()),
-        width.saturating_sub(4),
-        Style::new(palette.muted, palette.sidebar),
-    );
-    canvas.text(
-        2,
-        info_y + 4,
-        &format!("{} artists", app.artists.len()),
-        width.saturating_sub(4),
-        Style::new(palette.muted, palette.sidebar),
-    );
+    if height >= 28 {
+        let info_y = height.saturating_sub(7);
+        canvas.text(2, info_y, "YOUR LIBRARY", width.saturating_sub(4), Style::new(palette.faint, palette.sidebar).bold());
+        canvas.text(
+            2,
+            info_y + 2,
+            &format!("{} songs", app.tracks.len()),
+            width.saturating_sub(4),
+            Style::new(palette.muted, palette.sidebar),
+        );
+        canvas.text(
+            2,
+            info_y + 3,
+            &format!("{} albums", app.albums.len()),
+            width.saturating_sub(4),
+            Style::new(palette.muted, palette.sidebar),
+        );
+        canvas.text(
+            2,
+            info_y + 4,
+            &format!("{} artists", app.artists.len()),
+            width.saturating_sub(4),
+            Style::new(palette.muted, palette.sidebar),
+        );
+        canvas.text(
+            2,
+            info_y + 5,
+            &format!("{} playlists", app.playlists.len()),
+            width.saturating_sub(4),
+            Style::new(palette.muted, palette.sidebar),
+        );
+    }
 }
 
 fn draw_topbar(
@@ -395,7 +408,7 @@ fn draw_topbar(
         let cursor = if app.search_editing { "_" } else { "" };
         let query = if app.search_query.is_empty() {
             if app.search_editing {
-                format!("Search songs, albums, artists{cursor}")
+                format!("Search library{cursor}")
             } else {
                 "Search".to_owned()
             }
@@ -413,20 +426,13 @@ fn draw_topbar(
             ),
         );
     } else {
-        let title = match app.detail {
-            Some(DetailView::Album(index)) => app
-                .albums
-                .get(index)
-                .map(|album| album.title.as_str())
-                .unwrap_or(app.view.label()),
-            Some(DetailView::Artist(index)) => app
-                .artists
-                .get(index)
-                .map(|artist| artist.name.as_str())
-                .unwrap_or(app.view.label()),
-            None => app.view.label(),
-        };
-        canvas.text(x + 3, 1, title, width.saturating_sub(6), Style::new(palette.text, palette.surface).bold());
+        canvas.text(
+            x + 3,
+            1,
+            app.view.label(),
+            width.saturating_sub(6),
+            Style::new(palette.text, palette.surface).bold(),
+        );
     }
 
     let scan = match app.scan_phase {
@@ -434,14 +440,15 @@ fn draw_topbar(
         ScanPhase::Discovering => Some("Scanning folders...".to_owned()),
         ScanPhase::Reading { done, total } => Some(format!("Tags {done}/{total}")),
     };
-    let right = scan.unwrap_or_else(|| format!("{} theme", app.theme.label()));
-    canvas.text_right(
-        x + width.saturating_sub(2),
-        1,
-        &right,
-        20,
-        Style::new(palette.muted, palette.surface),
-    );
+    if let Some(scan) = scan {
+        canvas.text_right(
+            x + width.saturating_sub(2),
+            1,
+            &scan,
+            24,
+            Style::new(palette.muted, palette.surface),
+        );
+    }
 }
 
 fn draw_content(
@@ -460,6 +467,7 @@ fn draw_content(
         View::Songs => draw_songs(canvas, app, palette, x, y, width, height),
         View::Albums => draw_albums(canvas, app, palette, x, y, width, height),
         View::Artists => draw_artists(canvas, app, palette, x, y, width, height),
+        View::Playlists => draw_playlists(canvas, app, palette, x, y, width, height),
         View::Folders => draw_folders(canvas, app, palette, x, y, width, height),
     }
 }
@@ -474,12 +482,13 @@ fn draw_home(
     height: u16,
 ) {
     let card_gap = 2;
-    let card_width = width.saturating_sub(8 + card_gap * 2) / 3;
+    let card_width = width.saturating_sub(8 + card_gap * 3) / 4;
     let card_y = y + 1;
     let labels = [
         (app.tracks.len().to_string(), "Songs"),
         (app.albums.len().to_string(), "Albums"),
         (app.artists.len().to_string(), "Artists"),
+        (app.playlists.len().to_string(), "Playlists"),
     ];
     for (index, (value, label)) in labels.iter().enumerate() {
         let card_x = x + 3 + index as u16 * (card_width + card_gap);
@@ -575,6 +584,15 @@ fn draw_search(
         let row_y = y + 3 + row as u16;
         let selected = position == app.selected;
         let (kind, primary, secondary, current) = match item {
+            SearchItem::Playlist(index) => {
+                let playlist = &app.playlists[index];
+                (
+                    "PLAYLIST",
+                    playlist.name.as_str(),
+                    format!("{} available songs", playlist.tracks.len()),
+                    false,
+                )
+            }
             SearchItem::Artist(index) => {
                 let artist = &app.artists[index];
                 (
@@ -744,6 +762,106 @@ fn draw_artists(
     }
 }
 
+fn draw_playlists(
+    canvas: &mut Canvas,
+    app: &App,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+) {
+    if let Some(DetailView::Playlist(index)) = app.detail {
+        if let Some(playlist) = app.playlists.get(index) {
+            let missing = playlist.track_paths.len().saturating_sub(playlist.tracks.len());
+            let subtitle = if missing == 0 {
+                format!(
+                    "{} songs  -  {}",
+                    playlist.tracks.len(),
+                    format_duration(playlist.duration)
+                )
+            } else {
+                format!(
+                    "{} available songs  -  {} unavailable  -  {}",
+                    playlist.tracks.len(),
+                    missing,
+                    format_duration(playlist.duration)
+                )
+            };
+            draw_collection_header(
+                canvas,
+                palette,
+                x,
+                y,
+                width,
+                "PLAYLIST",
+                &playlist.name,
+                &subtitle,
+            );
+            if playlist.tracks.is_empty() {
+                empty_message(
+                    canvas,
+                    x,
+                    y + 7,
+                    width,
+                    if playlist.track_paths.is_empty() {
+                        "This playlist is empty"
+                    } else {
+                        "Playlist songs are currently unavailable"
+                    },
+                    palette,
+                );
+            } else {
+                draw_track_table(
+                    canvas,
+                    app,
+                    palette,
+                    &playlist.tracks,
+                    app.selected,
+                    x + 2,
+                    y + 5,
+                    width.saturating_sub(4),
+                    height.saturating_sub(6),
+                    TrackColumns::Album,
+                );
+            }
+        }
+        return;
+    }
+
+    if app.playlists.is_empty() {
+        empty_message(canvas, x, y + height / 3, width, "No custom playlists", palette);
+        return;
+    }
+
+    let inner_x = x + 2;
+    let inner_width = width.saturating_sub(4);
+    canvas.text(inner_x + 3, y + 1, "#", 4, Style::new(palette.faint, palette.background));
+    canvas.text(inner_x + 9, y + 1, "PLAYLIST", inner_width / 2, Style::new(palette.faint, palette.background));
+    canvas.text_right(inner_x + inner_width - 12, y + 1, "SONGS", 8, Style::new(palette.faint, palette.background));
+    canvas.text_right(inner_x + inner_width - 1, y + 1, "TIME", 8, Style::new(palette.faint, palette.background));
+    canvas.hline(inner_x, y + 2, inner_width, '-', Style::new(palette.border, palette.background));
+
+    let visible = height.saturating_sub(4) as usize;
+    let start = window_start(app.selected, app.playlists.len(), visible);
+    for (row, position) in (start..app.playlists.len()).take(visible).enumerate() {
+        let playlist = &app.playlists[position];
+        let row_y = y + 3 + row as u16;
+        let selected = position == app.selected;
+        let background = row_background(selected, false, palette);
+        canvas.fill(inner_x, row_y, inner_width, 1, Style::new(palette.text, background));
+        canvas.text(inner_x + 3, row_y, &format!("{:>4}", position + 1), 4, Style::new(palette.muted, background));
+        canvas.text(inner_x + 9, row_y, &playlist.name, inner_width.saturating_sub(32), selected_style(selected, background, palette));
+        let songs = if playlist.tracks.len() == playlist.track_paths.len() {
+            playlist.tracks.len().to_string()
+        } else {
+            format!("{}/{}", playlist.tracks.len(), playlist.track_paths.len())
+        };
+        canvas.text_right(inner_x + inner_width - 12, row_y, &songs, 8, Style::new(palette.muted, background));
+        canvas.text_right(inner_x + inner_width - 1, row_y, &format_duration(playlist.duration), 8, Style::new(palette.muted, background));
+    }
+}
+
 fn draw_folders(
     canvas: &mut Canvas,
     app: &App,
@@ -802,7 +920,7 @@ fn draw_folders(
     }
 
     if app.browser_entries.is_empty() {
-        canvas.text(browser_x + 2, list_y, "No subfolders", browser_width.saturating_sub(4), Style::new(palette.muted, palette.background));
+        canvas.text(browser_x + 2, list_y, "Folder is empty", browser_width.saturating_sub(4), Style::new(palette.muted, palette.background));
     } else {
         let start = window_start(app.browser_selected, app.browser_entries.len(), list_height);
         for (row, position) in (start..app.browser_entries.len()).take(list_height).enumerate() {
@@ -810,8 +928,82 @@ fn draw_folders(
             let selected = browser_active && position == app.browser_selected;
             let background = if selected { palette.selected } else { palette.background };
             canvas.fill(browser_x + 1, row_y, browser_width.saturating_sub(2), 1, Style::new(palette.text, background));
-            canvas.text(browser_x + 2, row_y, ">", 1, Style::new(palette.accent, background));
-            canvas.text(browser_x + 4, row_y, &app.browser_entries[position].name, browser_width.saturating_sub(6), selected_style(selected, background, palette));
+            let entry = &app.browser_entries[position];
+            match &entry.kind {
+                DirectoryEntryKind::Directory => {
+                    canvas.text(browser_x + 2, row_y, "DIR", 3, Style::new(palette.accent, background).bold());
+                    canvas.text(
+                        browser_x + 6,
+                        row_y,
+                        &entry.name,
+                        browser_width.saturating_sub(8),
+                        selected_style(selected, background, palette),
+                    );
+                }
+                DirectoryEntryKind::Track(track) => {
+                    let is_current = app
+                        .current_track()
+                        .is_some_and(|current| current.path.as_path() == track.path.as_path());
+                    canvas.text(
+                        browser_x + 2,
+                        row_y,
+                        if is_current { ">" } else { "♪" },
+                        1,
+                        Style::new(palette.accent, background).bold(),
+                    );
+
+                    let duration_width = 7;
+                    if browser_width >= 56 {
+                        let number = match (track.disc_no, track.track_no) {
+                            (Some(disc), Some(track)) => format!("{disc}.{track:02}"),
+                            (None, Some(track)) => format!("{track:02}"),
+                            _ => String::new(),
+                        };
+                        if !number.is_empty() {
+                            canvas.text(browser_x + 4, row_y, &number, 5, Style::new(palette.faint, background));
+                        }
+
+                        let title_x = browser_x + 10;
+                        let artist_width = browser_width.saturating_mul(30) / 100;
+                        let artist_x = browser_x
+                            + browser_width
+                                .saturating_sub(artist_width + duration_width + 2);
+                        let title_width = artist_x.saturating_sub(title_x + 1);
+                        canvas.text(
+                            title_x,
+                            row_y,
+                            &track.title,
+                            title_width,
+                            selected_style(selected, background, palette),
+                        );
+                        canvas.text(
+                            artist_x,
+                            row_y,
+                            &track.artist,
+                            artist_width,
+                            Style::new(palette.muted, background),
+                        );
+                    } else {
+                        canvas.text(
+                            browser_x + 4,
+                            row_y,
+                            &track.title,
+                            browser_width.saturating_sub(duration_width + 7),
+                            selected_style(selected, background, palette),
+                        );
+                    }
+                    canvas.text_right(
+                        browser_x + browser_width.saturating_sub(2),
+                        row_y,
+                        &track
+                            .duration
+                            .map(format_duration)
+                            .unwrap_or_else(|| "--:--".to_owned()),
+                        duration_width,
+                        Style::new(palette.muted, background),
+                    );
+                }
+            }
         }
     }
 
@@ -1004,8 +1196,57 @@ fn draw_player(
     canvas.text(2, y + 4, &app.status, canvas.width.saturating_sub(4), Style::new(palette.muted, palette.player));
 }
 
+fn draw_text_input(canvas: &mut Canvas, app: &App, palette: Palette) {
+    let Some(input) = app.text_input.as_ref() else {
+        return;
+    };
+    let width = canvas.width.min(64).saturating_sub(4).max(28);
+    let height = 7;
+    let x = (canvas.width - width) / 2;
+    let y = (canvas.height - height) / 2;
+
+    canvas.fill(x, y, width, height, Style::new(palette.text, palette.surface));
+    canvas.border(x, y, width, height, Style::new(palette.accent, palette.surface));
+    canvas.text(x + 3, y + 1, &input.prompt, width.saturating_sub(6), Style::new(palette.text, palette.surface).bold());
+    canvas.fill(x + 3, y + 3, width.saturating_sub(6), 1, Style::new(palette.text, palette.surface_alt));
+    let value = format!("{}_", input.value);
+    canvas.text(x + 4, y + 3, &value, width.saturating_sub(8), Style::new(palette.text, palette.surface_alt));
+}
+
+fn draw_playlist_picker(canvas: &mut Canvas, app: &App, palette: Palette) {
+    let Some(picker) = app.playlist_picker.as_ref() else {
+        return;
+    };
+    let width = canvas.width.min(68).saturating_sub(4).max(32);
+    let max_rows = canvas.height.saturating_sub(10) as usize;
+    let list_rows = app.playlists.len().min(max_rows).max(1);
+    let height = (list_rows as u16 + 6).min(canvas.height.saturating_sub(4)).max(9);
+    let x = (canvas.width - width) / 2;
+    let y = (canvas.height - height) / 2;
+
+    canvas.fill(x, y, width, height, Style::new(palette.text, palette.surface));
+    canvas.border(x, y, width, height, Style::new(palette.accent, palette.surface));
+    canvas.text(x + 3, y + 1, "Add to playlist", width.saturating_sub(6), Style::new(palette.text, palette.surface).bold());
+    let subtitle = format!("{}  -  {} songs", picker.source_label, picker.track_paths.len());
+    canvas.text(x + 3, y + 2, &subtitle, width.saturating_sub(6), Style::new(palette.muted, palette.surface));
+    canvas.hline(x + 2, y + 3, width.saturating_sub(4), '-', Style::new(palette.border, palette.surface));
+
+    let rows = height.saturating_sub(5) as usize;
+    let start = window_start(picker.selected, app.playlists.len(), rows);
+    for (row, position) in (start..app.playlists.len()).take(rows).enumerate() {
+        let playlist = &app.playlists[position];
+        let row_y = y + 4 + row as u16;
+        let selected = position == picker.selected;
+        let background = if selected { palette.selected } else { palette.surface };
+        canvas.fill(x + 2, row_y, width.saturating_sub(4), 1, Style::new(palette.text, background));
+        canvas.text(x + 3, row_y, if selected { ">" } else { " " }, 1, Style::new(palette.accent, background).bold());
+        canvas.text(x + 5, row_y, &playlist.name, width.saturating_sub(18), selected_style(selected, background, palette));
+        canvas.text_right(x + width.saturating_sub(3), row_y, &playlist.tracks.len().to_string(), 8, Style::new(palette.muted, background));
+    }
+}
+
 fn draw_help(canvas: &mut Canvas, palette: Palette) {
-    let width = canvas.width.min(78).saturating_sub(4);
+    let width = canvas.width.min(82).saturating_sub(4);
     let height = canvas.height.min(24).saturating_sub(2);
     let x = (canvas.width - width) / 2;
     let y = (canvas.height - height) / 2;
@@ -1015,30 +1256,28 @@ fn draw_help(canvas: &mut Canvas, palette: Palette) {
     canvas.text(x + 3, y + 1, "Keyboard", width.saturating_sub(6), Style::new(palette.text, palette.surface).bold());
 
     let controls = [
-        ("1..6", "Open Home, Search, Songs, Albums, Artists, Folders"),
+        ("1..7", "Switch Home through Folders"),
         ("/", "Search; in Folders, open filesystem root /"),
-        ("Up/Down, j/k", "Move selection; PageUp/PageDown moves ten rows"),
-        ("Enter", "Open an album, artist, folder, or play a song"),
-        ("Esc", "Close detail/search or return Home"),
-        ("Space", "Play or pause"),
-        ("n / p", "Next / previous song in the active queue"),
-        ("[ / ]", "Seek backward / forward five seconds"),
-        ("+ / -", "Volume"),
-        ("x", "Shuffle current queue"),
-        ("r", "Repeat off / all / one"),
-        ("t", "Dark / light theme"),
-        ("Folders: Left/Right", "Switch saved roots / directory browser"),
-        ("Folders: Backspace", "Parent directory; ~ opens home; / opens root"),
-        ("Folders: A / D", "Add current folder / remove selected root"),
+        ("Up/Down, j/k", "Move; PgUp/PgDn ten rows; g/G first/last"),
+        ("Enter / Esc", "Open or play / close detail or modal"),
+        ("Space, n, p", "Play-pause / next / previous"),
+        ("[ ], + -", "Seek by five seconds / change volume"),
+        ("x / r / t", "Shuffle / repeat mode / dark-light theme"),
+        ("a", "Add song, album, artist, or playlist"),
+        ("Playlists c/e", "Create / rename playlist"),
+        ("Playlists d/D", "Remove selected song / delete playlist"),
+        ("Picker c/Enter", "Create target playlist / add to selected playlist"),
+        ("Folders Left/Right", "Switch roots and directory browser"),
+        ("Folders Enter/Backspace", "Open directory / go to parent"),
+        ("Folders ~ / a / d", "Home / add folder / remove root"),
         ("u", "Rescan saved library folders"),
-        ("?", "Open or close this help"),
-        ("q", "Quit"),
+        ("? / q", "Close help / quit"),
     ];
 
     for (index, (key, action)) in controls.iter().take(height.saturating_sub(4) as usize).enumerate() {
         let row = y + 3 + index as u16;
-        canvas.text(x + 3, row, key, 20, Style::new(palette.accent, palette.surface).bold());
-        canvas.text(x + 24, row, action, width.saturating_sub(27), Style::new(palette.text, palette.surface));
+        canvas.text(x + 3, row, key, 24, Style::new(palette.accent, palette.surface).bold());
+        canvas.text(x + 28, row, action, width.saturating_sub(31), Style::new(palette.text, palette.surface));
     }
 }
 
@@ -1122,5 +1361,5 @@ fn format_time(seconds: f64) -> String {
 fn draw_too_small(canvas: &mut Canvas, palette: Palette) {
     canvas.text(2, 2, "MUSA", 10, Style::new(palette.accent, palette.background).bold());
     canvas.text(2, 4, "Terminal is too small.", 40, Style::new(palette.text, palette.background).bold());
-    canvas.text(2, 5, "Minimum size: 72 x 20", 40, Style::new(palette.muted, palette.background));
+    canvas.text(2, 5, "Minimum size: 72 x 24", 40, Style::new(palette.muted, palette.background));
 }

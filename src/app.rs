@@ -10,7 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::{
     Result,
     audio::AudioEngine,
-    library::{self, DirectoryEntry, ScanEvent, Track},
+    library::{self, DirectoryEntry, DirectoryEntryKind, ScanEvent, Track},
     storage,
 };
 
@@ -25,15 +25,6 @@ pub enum PlaybackState {
 pub enum Theme {
     Dark,
     Light,
-}
-
-impl Theme {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Dark => "Dark",
-            Self::Light => "Light",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,16 +51,18 @@ pub enum View {
     Songs,
     Albums,
     Artists,
+    Playlists,
     Folders,
 }
 
 impl View {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Home,
         Self::Search,
         Self::Songs,
         Self::Albums,
         Self::Artists,
+        Self::Playlists,
         Self::Folders,
     ];
 
@@ -80,6 +73,7 @@ impl View {
             Self::Songs => "Songs",
             Self::Albums => "Albums",
             Self::Artists => "Artists",
+            Self::Playlists => "Playlists",
             Self::Folders => "Folders",
         }
     }
@@ -89,6 +83,7 @@ impl View {
 pub enum DetailView {
     Album(usize),
     Artist(usize),
+    Playlist(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +94,7 @@ pub enum FolderFocus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchItem {
+    Playlist(usize),
     Artist(usize),
     Album(usize),
     Track(usize),
@@ -119,6 +115,36 @@ pub struct Artist {
     pub album_count: usize,
 }
 
+
+#[derive(Clone, Debug)]
+pub struct Playlist {
+    pub name: String,
+    pub track_paths: Vec<PathBuf>,
+    pub tracks: Vec<usize>,
+    pub duration: Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextInputKind {
+    CreatePlaylist,
+    RenamePlaylist(usize),
+}
+
+#[derive(Clone, Debug)]
+pub struct TextInput {
+    pub prompt: String,
+    pub value: String,
+    pub kind: TextInputKind,
+    pub pending_paths: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlaylistPicker {
+    pub selected: usize,
+    pub track_paths: Vec<PathBuf>,
+    pub source_label: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScanPhase {
     Idle,
@@ -131,6 +157,7 @@ pub struct App {
     pub tracks: Vec<Track>,
     pub albums: Vec<Album>,
     pub artists: Vec<Artist>,
+    pub playlists: Vec<Playlist>,
 
     pub view: View,
     pub detail: Option<DetailView>,
@@ -154,12 +181,19 @@ pub struct App {
     pub status: String,
     pub theme: Theme,
     pub help_open: bool,
+    pub text_input: Option<TextInput>,
+    pub playlist_picker: Option<PlaylistPicker>,
 
     pub browser_dir: PathBuf,
     pub browser_entries: Vec<DirectoryEntry>,
     pub folder_focus: FolderFocus,
     pub root_selected: usize,
     pub browser_selected: usize,
+
+    browser_queue_base: Vec<Track>,
+    browser_queue: Vec<Track>,
+    browser_queue_pos: Option<usize>,
+    browser_current: Option<Track>,
 
     pub scan_phase: ScanPhase,
     scan_rx: Option<Receiver<ScanEvent>>,
@@ -171,8 +205,17 @@ impl App {
     pub fn new() -> Result<Self> {
         let roots = storage::load_roots();
         let theme = storage::load_theme();
+        let playlists = storage::load_playlists()
+            .into_iter()
+            .map(|playlist| Playlist {
+                name: playlist.name,
+                track_paths: playlist.tracks,
+                tracks: Vec::new(),
+                duration: Duration::ZERO,
+            })
+            .collect();
         let browser_dir = storage::home_dir();
-        let browser_entries = library::read_subdirectories(&browser_dir).unwrap_or_default();
+        let browser_entries = library::read_directory_entries(&browser_dir).unwrap_or_default();
         let volume = 70;
         let view = if roots.is_empty() {
             View::Folders
@@ -185,6 +228,7 @@ impl App {
             tracks: Vec::new(),
             albums: Vec::new(),
             artists: Vec::new(),
+            playlists,
             view,
             detail: None,
             selected: 0,
@@ -203,11 +247,17 @@ impl App {
             status: String::new(),
             theme,
             help_open: false,
+            text_input: None,
+            playlist_picker: None,
             browser_dir,
             browser_entries,
             folder_focus: FolderFocus::Browser,
             root_selected: 0,
             browser_selected: 0,
+            browser_queue_base: Vec::new(),
+            browser_queue: Vec::new(),
+            browser_queue_pos: None,
+            browser_current: None,
             scan_phase: ScanPhase::Idle,
             scan_rx: None,
             rescan_pending: false,
@@ -232,6 +282,16 @@ impl App {
             if matches!(key.code, KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')) {
                 self.help_open = false;
             }
+            return false;
+        }
+
+        if self.text_input.is_some() {
+            self.handle_text_input_key(key);
+            return false;
+        }
+
+        if self.playlist_picker.is_some() {
+            self.handle_playlist_picker_key(key);
             return false;
         }
 
@@ -281,7 +341,11 @@ impl App {
                 self.set_view(View::Artists);
                 Ok(())
             }
-            KeyCode::Char('6') | KeyCode::Char('o') => {
+            KeyCode::Char('6') => {
+                self.set_view(View::Playlists);
+                Ok(())
+            }
+            KeyCode::Char('7') | KeyCode::Char('o') => {
                 self.set_view(View::Folders);
                 Ok(())
             }
@@ -351,8 +415,16 @@ impl App {
                 self.begin_scan();
                 Ok(())
             }
+            KeyCode::Char('c') if self.view == View::Playlists => {
+                self.open_create_playlist(Vec::new());
+                Ok(())
+            }
+            KeyCode::Char('e') if self.view == View::Playlists => self.open_rename_playlist(),
             KeyCode::Char('a') if self.view == View::Folders => self.add_browser_root(),
+            KeyCode::Char('a') => self.open_playlist_picker(),
             KeyCode::Char('d') if self.view == View::Folders => self.remove_selected_root(),
+            KeyCode::Char('d') if self.view == View::Playlists => self.remove_selected_playlist_track(),
+            KeyCode::Char('D') if self.view == View::Playlists => self.delete_selected_playlist(),
             KeyCode::Char('~') if self.view == View::Folders => {
                 self.browser_dir = storage::home_dir();
                 self.refresh_browser();
@@ -376,6 +448,370 @@ impl App {
                 self.status = error.to_string();
                 self.state = PlaybackState::Stopped;
             }
+        }
+    }
+
+    fn handle_text_input_key(&mut self, key: KeyEvent) {
+        let Some(mut input) = self.text_input.take() else {
+            return;
+        };
+
+        match key.code {
+            KeyCode::Esc => {}
+            KeyCode::Enter => {
+                if let Err(error) = self.commit_text_input(input) {
+                    self.status = error.to_string();
+                }
+            }
+            KeyCode::Backspace => {
+                input.value.pop();
+                self.text_input = Some(input);
+            }
+            KeyCode::Delete => {
+                input.value.clear();
+                self.text_input = Some(input);
+            }
+            KeyCode::Char(character)
+                if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && input.value.chars().count() < 80 =>
+            {
+                input.value.push(character);
+                self.text_input = Some(input);
+            }
+            _ => self.text_input = Some(input),
+        }
+    }
+
+    fn handle_playlist_picker_key(&mut self, key: KeyEvent) {
+        let Some(mut picker) = self.playlist_picker.take() else {
+            return;
+        };
+
+        match key.code {
+            KeyCode::Esc => {}
+            KeyCode::Up | KeyCode::Char('k') => {
+                picker.selected = move_index(picker.selected, self.playlists.len(), -1);
+                self.playlist_picker = Some(picker);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                picker.selected = move_index(picker.selected, self.playlists.len(), 1);
+                self.playlist_picker = Some(picker);
+            }
+            KeyCode::PageUp => {
+                picker.selected = move_index(picker.selected, self.playlists.len(), -10);
+                self.playlist_picker = Some(picker);
+            }
+            KeyCode::PageDown => {
+                picker.selected = move_index(picker.selected, self.playlists.len(), 10);
+                self.playlist_picker = Some(picker);
+            }
+            KeyCode::Char('c') => self.open_create_playlist(picker.track_paths),
+            KeyCode::Enter => {
+                if let Err(error) = self.add_paths_to_playlist(picker.selected, picker.track_paths) {
+                    self.status = error.to_string();
+                }
+            }
+            _ => self.playlist_picker = Some(picker),
+        }
+    }
+
+    fn open_create_playlist(&mut self, pending_paths: Vec<PathBuf>) {
+        self.text_input = Some(TextInput {
+            prompt: if pending_paths.is_empty() {
+                "Create playlist".to_owned()
+            } else {
+                "Create playlist and add selection".to_owned()
+            },
+            value: String::new(),
+            kind: TextInputKind::CreatePlaylist,
+            pending_paths,
+        });
+    }
+
+    fn open_rename_playlist(&mut self) -> Result<()> {
+        let Some(index) = self.selected_playlist_index() else {
+            self.status = "Select a playlist first".to_owned();
+            return Ok(());
+        };
+        let Some(playlist) = self.playlists.get(index) else {
+            return Ok(());
+        };
+
+        self.text_input = Some(TextInput {
+            prompt: "Rename playlist".to_owned(),
+            value: playlist.name.clone(),
+            kind: TextInputKind::RenamePlaylist(index),
+            pending_paths: Vec::new(),
+        });
+        Ok(())
+    }
+
+    fn commit_text_input(&mut self, input: TextInput) -> Result<()> {
+        let name = input.value.trim().to_owned();
+        if name.is_empty() {
+            self.status = "Playlist name cannot be empty".to_owned();
+            self.text_input = Some(input);
+            return Ok(());
+        }
+
+        let ignored = match input.kind {
+            TextInputKind::RenamePlaylist(index) => Some(index),
+            TextInputKind::CreatePlaylist => None,
+        };
+        if self.playlists.iter().enumerate().any(|(index, playlist)| {
+            Some(index) != ignored && playlist.name.eq_ignore_ascii_case(&name)
+        }) {
+            self.status = format!("Playlist '{name}' already exists");
+            self.text_input = Some(input);
+            return Ok(());
+        }
+
+        match input.kind {
+            TextInputKind::CreatePlaylist => {
+                let mut track_paths = Vec::new();
+                for path in input.pending_paths {
+                    if !track_paths.iter().any(|existing| existing == &path) {
+                        track_paths.push(path);
+                    }
+                }
+                self.playlists.push(Playlist {
+                    name: name.clone(),
+                    track_paths,
+                    tracks: Vec::new(),
+                    duration: Duration::ZERO,
+                });
+                self.rebuild_playlist_indexes();
+                self.save_playlists()?;
+                self.rebuild_search();
+                self.view = View::Playlists;
+                self.detail = None;
+                self.selected = self.playlists.len().saturating_sub(1);
+                let count = self.playlists[self.selected].track_paths.len();
+                self.status = if count == 0 {
+                    format!("Created playlist '{name}'")
+                } else {
+                    format!("Created playlist '{name}' with {count} songs")
+                };
+            }
+            TextInputKind::RenamePlaylist(index) => {
+                if let Some(playlist) = self.playlists.get_mut(index) {
+                    playlist.name = name.clone();
+                } else {
+                    return Ok(());
+                }
+                self.save_playlists()?;
+                self.rebuild_search();
+                self.status = format!("Renamed playlist to '{name}'");
+            }
+        }
+
+        Ok(())
+    }
+
+    fn open_playlist_picker(&mut self) -> Result<()> {
+        let Some((indices, source_label)) = self.selected_tracks_for_playlist() else {
+            self.status = "Select a song, album, artist, or playlist first".to_owned();
+            return Ok(());
+        };
+
+        let mut track_paths = Vec::new();
+        for index in indices {
+            if let Some(track) = self.tracks.get(index) {
+                if !track_paths.iter().any(|path| path == &track.path) {
+                    track_paths.push(track.path.clone());
+                }
+            }
+        }
+        if track_paths.is_empty() {
+            self.status = "The selection contains no available songs".to_owned();
+            return Ok(());
+        }
+
+        if self.playlists.is_empty() {
+            self.open_create_playlist(track_paths);
+        } else {
+            self.playlist_picker = Some(PlaylistPicker {
+                selected: 0,
+                track_paths,
+                source_label,
+            });
+        }
+        Ok(())
+    }
+
+    fn selected_tracks_for_playlist(&self) -> Option<(Vec<usize>, String)> {
+        match self.view {
+            View::Home => {
+                let recent = self.recent_indices();
+                let track = recent.get(self.selected).copied()?;
+                Some((vec![track], self.tracks.get(track)?.title.clone()))
+            }
+            View::Search => match *self.search_results.get(self.selected)? {
+                SearchItem::Playlist(index) => {
+                    let playlist = self.playlists.get(index)?;
+                    Some((playlist.tracks.clone(), playlist.name.clone()))
+                }
+                SearchItem::Artist(index) => {
+                    let artist = self.artists.get(index)?;
+                    Some((artist.tracks.clone(), artist.name.clone()))
+                }
+                SearchItem::Album(index) => {
+                    let album = self.albums.get(index)?;
+                    Some((album.tracks.clone(), album.title.clone()))
+                }
+                SearchItem::Track(index) => {
+                    Some((vec![index], self.tracks.get(index)?.title.clone()))
+                }
+            },
+            View::Songs => {
+                let track = self.selected;
+                Some((vec![track], self.tracks.get(track)?.title.clone()))
+            }
+            View::Albums => {
+                let album_index = match self.detail {
+                    Some(DetailView::Album(index)) => index,
+                    _ => self.selected,
+                };
+                let album = self.albums.get(album_index)?;
+                if matches!(self.detail, Some(DetailView::Album(_))) {
+                    let track = *album.tracks.get(self.selected)?;
+                    Some((vec![track], self.tracks.get(track)?.title.clone()))
+                } else {
+                    Some((album.tracks.clone(), album.title.clone()))
+                }
+            }
+            View::Artists => {
+                let artist_index = match self.detail {
+                    Some(DetailView::Artist(index)) => index,
+                    _ => self.selected,
+                };
+                let artist = self.artists.get(artist_index)?;
+                if matches!(self.detail, Some(DetailView::Artist(_))) {
+                    let track = *artist.tracks.get(self.selected)?;
+                    Some((vec![track], self.tracks.get(track)?.title.clone()))
+                } else {
+                    Some((artist.tracks.clone(), artist.name.clone()))
+                }
+            }
+            View::Playlists => {
+                let playlist_index = self.selected_playlist_index()?;
+                let playlist = self.playlists.get(playlist_index)?;
+                if matches!(self.detail, Some(DetailView::Playlist(_))) {
+                    let track = *playlist.tracks.get(self.selected)?;
+                    Some((vec![track], self.tracks.get(track)?.title.clone()))
+                } else {
+                    Some((playlist.tracks.clone(), playlist.name.clone()))
+                }
+            }
+            View::Folders => None,
+        }
+    }
+
+    fn add_paths_to_playlist(&mut self, index: usize, paths: Vec<PathBuf>) -> Result<()> {
+        let (name, added) = {
+            let Some(playlist) = self.playlists.get_mut(index) else {
+                return Ok(());
+            };
+            let name = playlist.name.clone();
+            let mut added = 0;
+            for path in paths {
+                if !playlist.track_paths.iter().any(|existing| existing == &path) {
+                    playlist.track_paths.push(path);
+                    added += 1;
+                }
+            }
+            (name, added)
+        };
+
+        self.rebuild_playlist_indexes();
+        self.save_playlists()?;
+        self.status = if added == 0 {
+            format!("All selected songs are already in '{name}'")
+        } else {
+            format!("Added {added} songs to '{name}'")
+        };
+        Ok(())
+    }
+
+    fn remove_selected_playlist_track(&mut self) -> Result<()> {
+        let Some(DetailView::Playlist(playlist_index)) = self.detail else {
+            self.status = "Open a playlist to remove one of its songs".to_owned();
+            return Ok(());
+        };
+        let Some(track_index) = self
+            .playlists
+            .get(playlist_index)
+            .and_then(|playlist| playlist.tracks.get(self.selected))
+            .copied()
+        else {
+            return Ok(());
+        };
+        let Some(path) = self.tracks.get(track_index).map(|track| track.path.clone()) else {
+            return Ok(());
+        };
+
+        if let Some(playlist) = self.playlists.get_mut(playlist_index) {
+            playlist.track_paths.retain(|existing| existing != &path);
+        }
+        self.rebuild_playlist_indexes();
+        self.save_playlists()?;
+        self.selected = self.selected.min(self.selection_len().saturating_sub(1));
+        self.status = "Removed song from playlist".to_owned();
+        Ok(())
+    }
+
+    fn delete_selected_playlist(&mut self) -> Result<()> {
+        let Some(index) = self.selected_playlist_index() else {
+            return Ok(());
+        };
+        let name = self.playlists[index].name.clone();
+        self.playlists.remove(index);
+        self.detail = None;
+        let next_selected = index.min(self.playlists.len().saturating_sub(1));
+        self.save_playlists()?;
+        self.rebuild_search();
+        self.selected = next_selected;
+        self.status = format!("Deleted playlist '{name}'");
+        Ok(())
+    }
+
+    fn selected_playlist_index(&self) -> Option<usize> {
+        match self.detail {
+            Some(DetailView::Playlist(index)) => self.playlists.get(index).map(|_| index),
+            _ if self.view == View::Playlists => self.playlists.get(self.selected).map(|_| self.selected),
+            _ => None,
+        }
+    }
+
+    fn save_playlists(&self) -> Result<()> {
+        let stored: Vec<storage::StoredPlaylist> = self
+            .playlists
+            .iter()
+            .map(|playlist| storage::StoredPlaylist {
+                name: playlist.name.clone(),
+                tracks: playlist.track_paths.clone(),
+            })
+            .collect();
+        storage::save_playlists(&stored)
+    }
+
+    fn rebuild_playlist_indexes(&mut self) {
+        let tracks = &self.tracks;
+        let path_to_index: HashMap<PathBuf, usize> = tracks
+            .iter()
+            .enumerate()
+            .map(|(index, track)| (track.path.clone(), index))
+            .collect();
+
+        for playlist in &mut self.playlists {
+            playlist.tracks = playlist
+                .track_paths
+                .iter()
+                .filter_map(|path| path_to_index.get(path).copied())
+                .collect();
+            playlist.duration = playlist.tracks.iter().fold(Duration::ZERO, |total, index| {
+                total.saturating_add(tracks[*index].duration.unwrap_or_default())
+            });
         }
     }
 
@@ -528,6 +964,12 @@ impl App {
         self.current = old_current_path
             .as_ref()
             .and_then(|path| path_to_index.get(path).copied());
+        if self.current.is_some() {
+            self.browser_current = None;
+            self.browser_queue_base.clear();
+            self.browser_queue.clear();
+            self.browser_queue_pos = None;
+        }
         self.queue_base = old_queue_paths
             .iter()
             .filter_map(|path| path_to_index.get(path).copied())
@@ -638,6 +1080,7 @@ impl App {
         artists.sort_by_cached_key(|artist| artist.name.to_lowercase());
         self.albums = albums;
         self.artists = artists;
+        self.rebuild_playlist_indexes();
         self.rebuild_search();
     }
 
@@ -654,6 +1097,11 @@ impl App {
             return;
         }
 
+        for (index, playlist) in self.playlists.iter().enumerate() {
+            if matches_tokens(&playlist.name.to_lowercase(), &tokens) {
+                self.search_results.push(SearchItem::Playlist(index));
+            }
+        }
         for (index, artist) in self.artists.iter().enumerate() {
             if matches_tokens(&artist.name.to_lowercase(), &tokens) {
                 self.search_results.push(SearchItem::Artist(index));
@@ -685,6 +1133,11 @@ impl App {
                     return Ok(());
                 };
                 match item {
+                    SearchItem::Playlist(index) => {
+                        self.view = View::Playlists;
+                        self.detail = Some(DetailView::Playlist(index));
+                        self.selected = 0;
+                    }
                     SearchItem::Artist(index) => {
                         self.view = View::Artists;
                         self.detail = Some(DetailView::Artist(index));
@@ -746,6 +1199,22 @@ impl App {
                     }
                 }
             },
+            View::Playlists => match self.detail {
+                Some(DetailView::Playlist(playlist_index)) => {
+                    if let Some(playlist) = self.playlists.get(playlist_index) {
+                        let queue = playlist.tracks.clone();
+                        if let Some(track) = queue.get(self.selected).copied() {
+                            self.play_queue(queue, track)?;
+                        }
+                    }
+                }
+                _ => {
+                    if self.selected < self.playlists.len() {
+                        self.detail = Some(DetailView::Playlist(self.selected));
+                        self.selected = 0;
+                    }
+                }
+            },
             View::Folders => self.activate_folder()?,
         }
         Ok(())
@@ -755,6 +1224,10 @@ impl App {
         if queue.is_empty() || self.tracks.get(track).is_none() {
             return Ok(());
         }
+        self.browser_queue_base.clear();
+        self.browser_queue.clear();
+        self.browser_queue_pos = None;
+        self.browser_current = None;
         self.queue_base = queue;
         self.current = Some(track);
         self.rebuild_queue_order();
@@ -769,6 +1242,7 @@ impl App {
         let title = track.title.clone();
 
         self.audio.play_file(&path)?;
+        self.browser_current = None;
         self.current = Some(index);
         self.queue_pos = self.queue.iter().position(|queued| *queued == index);
         self.state = PlaybackState::Playing;
@@ -776,6 +1250,49 @@ impl App {
 
         self.recent_paths.retain(|recent| recent != &path);
         self.recent_paths.insert(0, path);
+        self.recent_paths.truncate(50);
+        Ok(())
+    }
+
+    fn play_browser_queue(&mut self, queue: Vec<Track>, selected_path: &std::path::Path) -> Result<()> {
+        if queue.is_empty() {
+            return Ok(());
+        }
+
+        self.queue_base.clear();
+        self.queue.clear();
+        self.queue_pos = None;
+        self.current = None;
+        self.browser_queue_base = queue;
+        self.browser_current = self
+            .browser_queue_base
+            .iter()
+            .find(|track| track.path.as_path() == selected_path)
+            .cloned();
+        self.rebuild_browser_queue_order();
+
+        let position = self
+            .browser_queue
+            .iter()
+            .position(|track| track.path.as_path() == selected_path)
+            .unwrap_or(0);
+        self.play_browser_at(position)
+    }
+
+    fn play_browser_at(&mut self, position: usize) -> Result<()> {
+        let Some(track) = self.browser_queue.get(position).cloned() else {
+            return Ok(());
+        };
+
+        self.audio.play_file(&track.path)?;
+        self.current = None;
+        self.browser_queue_pos = Some(position);
+        self.browser_current = Some(track.clone());
+        self.state = PlaybackState::Playing;
+        self.status = format!("Playing {}", track.title);
+
+        self.recent_paths.retain(|recent| recent != &track.path);
+        self.recent_paths.insert(0, track.path);
         self.recent_paths.truncate(50);
         Ok(())
     }
@@ -793,7 +1310,10 @@ impl App {
                 self.status = "Playing".to_owned();
             }
             PlaybackState::Stopped => {
-                if let Some(current) = self.current {
+                if self.browser_current.is_some() {
+                    let position = self.browser_queue_pos.unwrap_or(0);
+                    self.play_browser_at(position)?;
+                } else if let Some(current) = self.current {
                     if self.queue_base.is_empty() {
                         self.queue_base.push(current);
                         self.rebuild_queue_order();
@@ -802,7 +1322,7 @@ impl App {
                 } else if let Some((queue, track)) = self.queue_for_selection() {
                     self.play_queue(queue, track)?;
                 } else {
-                    self.status = "Select a song, album, or artist first".to_owned();
+                    self.status = "Select a song, album, artist, or playlist first".to_owned();
                 }
             }
         }
@@ -819,6 +1339,11 @@ impl App {
             View::Search => {
                 let item = self.search_results.get(self.selected)?;
                 match *item {
+                    SearchItem::Playlist(index) => {
+                        let queue = self.playlists.get(index)?.tracks.clone();
+                        let track = queue.first().copied()?;
+                        Some((queue, track))
+                    }
                     SearchItem::Track(track) => {
                         let queue: Vec<usize> = self
                             .search_results
@@ -873,11 +1398,45 @@ impl App {
                 }?;
                 Some((queue, track))
             }
+            View::Playlists => {
+                let playlist_index = match self.detail {
+                    Some(DetailView::Playlist(index)) => index,
+                    _ => self.selected,
+                };
+                let queue = self.playlists.get(playlist_index)?.tracks.clone();
+                let track = if matches!(self.detail, Some(DetailView::Playlist(_))) {
+                    queue.get(self.selected).copied()
+                } else {
+                    queue.first().copied()
+                }?;
+                Some((queue, track))
+            }
             View::Folders => None,
         }
     }
 
     fn next_track(&mut self, automatic: bool) -> Result<()> {
+        if self.browser_current.is_some() {
+            if automatic && self.repeat == RepeatMode::One {
+                return self.play_browser_at(self.browser_queue_pos.unwrap_or(0));
+            }
+
+            if self.browser_queue.is_empty() {
+                return Ok(());
+            }
+            let current_pos = self.browser_queue_pos.unwrap_or(0);
+            let next_pos = if current_pos + 1 < self.browser_queue.len() {
+                current_pos + 1
+            } else if self.repeat == RepeatMode::All {
+                0
+            } else {
+                self.stop();
+                self.status = "Folder queue finished".to_owned();
+                return Ok(());
+            };
+            return self.play_browser_at(next_pos);
+        }
+
         if automatic && self.repeat == RepeatMode::One {
             if let Some(current) = self.current {
                 return self.play_track(current);
@@ -919,6 +1478,22 @@ impl App {
             self.status = "Restarted current song".to_owned();
             return Ok(());
         }
+
+        if self.browser_current.is_some() {
+            if self.browser_queue.is_empty() {
+                return Ok(());
+            }
+            let current_pos = self.browser_queue_pos.unwrap_or(0);
+            let previous_pos = if current_pos > 0 {
+                current_pos - 1
+            } else if self.repeat == RepeatMode::All {
+                self.browser_queue.len() - 1
+            } else {
+                0
+            };
+            return self.play_browser_at(previous_pos);
+        }
+
         if self.queue.is_empty() {
             return Ok(());
         }
@@ -965,6 +1540,7 @@ impl App {
     fn toggle_shuffle(&mut self) {
         self.shuffle = !self.shuffle;
         self.rebuild_queue_order();
+        self.rebuild_browser_queue_order();
         self.status = format!("Shuffle {}", if self.shuffle { "on" } else { "off" });
     }
 
@@ -993,6 +1569,30 @@ impl App {
         self.queue_pos = current.and_then(|current| self.queue.iter().position(|index| *index == current));
     }
 
+    fn rebuild_browser_queue_order(&mut self) {
+        let current_path = self.browser_current.as_ref().map(|track| track.path.clone());
+        self.browser_queue = self.browser_queue_base.clone();
+
+        if self.shuffle {
+            shuffle_slice(&mut self.browser_queue);
+            if let Some(path) = current_path.as_ref() {
+                if let Some(position) = self
+                    .browser_queue
+                    .iter()
+                    .position(|track| &track.path == path)
+                {
+                    self.browser_queue.swap(0, position);
+                }
+            }
+        }
+
+        self.browser_queue_pos = current_path.as_ref().and_then(|path| {
+            self.browser_queue
+                .iter()
+                .position(|track| &track.path == path)
+        });
+    }
+
     fn toggle_theme(&mut self) {
         self.theme = match self.theme {
             Theme::Dark => Theme::Light,
@@ -1000,8 +1600,6 @@ impl App {
         };
         if let Err(error) = storage::save_theme(self.theme) {
             self.status = format!("Theme changed, but could not be saved: {error}");
-        } else {
-            self.status = format!("{} theme", self.theme.label());
         }
     }
 
@@ -1065,6 +1663,13 @@ impl App {
                     .map_or(0, |artist| artist.tracks.len()),
                 _ => self.artists.len(),
             },
+            View::Playlists => match self.detail {
+                Some(DetailView::Playlist(index)) => self
+                    .playlists
+                    .get(index)
+                    .map_or(0, |playlist| playlist.tracks.len()),
+                _ => self.playlists.len(),
+            },
             View::Folders => match self.folder_focus {
                 FolderFocus::Roots => self.roots.len(),
                 FolderFocus::Browser => self.browser_entries.len(),
@@ -1083,8 +1688,23 @@ impl App {
             }
             FolderFocus::Browser => {
                 if let Some(entry) = self.browser_entries.get(self.browser_selected).cloned() {
-                    self.browser_dir = entry.path;
-                    self.refresh_browser();
+                    match entry.kind {
+                        DirectoryEntryKind::Directory => {
+                            self.browser_dir = entry.path;
+                            self.refresh_browser();
+                        }
+                        DirectoryEntryKind::Track(track) => {
+                            let queue: Vec<Track> = self
+                                .browser_entries
+                                .iter()
+                                .filter_map(|entry| match &entry.kind {
+                                    DirectoryEntryKind::Track(track) => Some(track.clone()),
+                                    DirectoryEntryKind::Directory => None,
+                                })
+                                .collect();
+                            self.play_browser_queue(queue, &track.path)?;
+                        }
+                    }
                 }
             }
         }
@@ -1099,7 +1719,7 @@ impl App {
     }
 
     fn refresh_browser(&mut self) {
-        match library::read_subdirectories(&self.browser_dir) {
+        match library::read_directory_entries(&self.browser_dir) {
             Ok(entries) => {
                 self.browser_entries = entries;
                 self.browser_selected = 0;
@@ -1146,6 +1766,7 @@ impl App {
             self.tracks.clear();
             self.albums.clear();
             self.artists.clear();
+            self.rebuild_playlist_indexes();
             self.search_results.clear();
             self.queue.clear();
             self.queue_base.clear();
@@ -1159,7 +1780,9 @@ impl App {
     }
 
     pub fn current_track(&self) -> Option<&Track> {
-        self.current.and_then(|index| self.tracks.get(index))
+        self.current
+            .and_then(|index| self.tracks.get(index))
+            .or(self.browser_current.as_ref())
     }
 
     pub fn recent_indices(&self) -> Vec<usize> {
@@ -1221,7 +1844,7 @@ fn move_index(current: usize, len: usize, delta: isize) -> usize {
         .min(len.saturating_sub(1))
 }
 
-fn shuffle_slice(values: &mut [usize]) {
+fn shuffle_slice<T>(values: &mut [T]) {
     if values.len() < 2 {
         return;
     }

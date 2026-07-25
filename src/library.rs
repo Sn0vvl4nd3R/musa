@@ -28,7 +28,7 @@ pub struct Track {
 }
 
 impl Track {
-    fn from_path(path: PathBuf) -> Self {
+    pub(crate) fn from_path(path: PathBuf) -> Self {
         let fallback = FallbackMeta::from_path(&path);
 
         let mut title = None;
@@ -183,7 +183,7 @@ fn collect(path: &Path, output: &mut Vec<PathBuf>) -> io::Result<()> {
     Ok(())
 }
 
-pub fn read_subdirectories(path: &Path) -> io::Result<Vec<DirectoryEntry>> {
+pub fn read_directory_entries(path: &Path) -> io::Result<Vec<DirectoryEntry>> {
     let read_dir = fs::read_dir(path)?;
     let mut entries = Vec::new();
 
@@ -195,18 +195,60 @@ pub fn read_subdirectories(path: &Path) -> io::Result<Vec<DirectoryEntry>> {
             entries.push(DirectoryEntry {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 path: entry.path(),
+                kind: DirectoryEntryKind::Directory,
+            });
+        } else if file_type.is_file() && is_supported_audio(&entry.path()) {
+            let path = entry.path();
+            let track = Track::from_path(path.clone());
+            entries.push(DirectoryEntry {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                path,
+                kind: DirectoryEntryKind::Track(track),
             });
         }
     }
 
-    entries.sort_by_cached_key(|entry| entry.name.to_lowercase());
+    entries.sort_by(|left, right| {
+        left.kind
+            .sort_rank()
+            .cmp(&right.kind.sort_rank())
+            .then_with(|| match (&left.kind, &right.kind) {
+                (DirectoryEntryKind::Track(left), DirectoryEntryKind::Track(right)) => left
+                    .disc_no
+                    .unwrap_or(0)
+                    .cmp(&right.disc_no.unwrap_or(0))
+                    .then_with(|| {
+                        left.track_no
+                            .unwrap_or(u32::MAX)
+                            .cmp(&right.track_no.unwrap_or(u32::MAX))
+                    })
+                    .then_with(|| lower(&left.title).cmp(&lower(&right.title))),
+                _ => lower(&left.name).cmp(&lower(&right.name)),
+            })
+    });
     Ok(entries)
+}
+
+#[derive(Clone, Debug)]
+pub enum DirectoryEntryKind {
+    Directory,
+    Track(Track),
+}
+
+impl DirectoryEntryKind {
+    fn sort_rank(&self) -> u8 {
+        match self {
+            Self::Directory => 0,
+            Self::Track(_) => 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct DirectoryEntry {
     pub name: String,
     pub path: PathBuf,
+    pub kind: DirectoryEntryKind,
 }
 
 pub fn is_supported_audio(path: &Path) -> bool {
