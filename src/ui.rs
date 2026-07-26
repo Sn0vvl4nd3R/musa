@@ -92,7 +92,7 @@ impl Style {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Cell {
     ch: char,
     style: Style,
@@ -105,16 +105,26 @@ struct Canvas {
 }
 
 impl Canvas {
-    fn new(width: u16, height: u16, palette: Palette) -> Self {
+    fn empty() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            cells: Vec::new(),
+        }
+    }
+
+    fn reset(&mut self, width: u16, height: u16, palette: Palette) -> bool {
+        let resized = self.width != width || self.height != height;
+        self.width = width;
+        self.height = height;
+
         let cell = Cell {
             ch: ' ',
             style: Style::new(palette.text, palette.background),
         };
-        Self {
-            width,
-            height,
-            cells: vec![cell; width as usize * height as usize],
-        }
+        self.cells.resize(width as usize * height as usize, cell);
+        self.cells.fill(cell);
+        resized
     }
 
     fn put(&mut self, x: u16, y: u16, ch: char, style: Style) {
@@ -163,17 +173,27 @@ impl Canvas {
     }
 
     fn fill(&mut self, x: u16, y: u16, width: u16, height: u16, style: Style) {
+        let right = x.saturating_add(width).min(self.width);
         for row in y..y.saturating_add(height).min(self.height) {
-            for column in x..x.saturating_add(width).min(self.width) {
-                self.put(column, row, ' ', style);
-            }
+            let start = row as usize * self.width as usize + x.min(self.width) as usize;
+            let end = row as usize * self.width as usize + right as usize;
+            self.cells[start..end].fill(Cell { ch: ' ', style });
         }
     }
 
     fn hline(&mut self, x: u16, y: u16, width: u16, ch: char, style: Style) {
+        if y >= self.height {
+            return;
+        }
         for column in x..x.saturating_add(width).min(self.width) {
             self.put(column, y, ch, style);
         }
+    }
+
+    fn bar(&mut self, x: u16, y: u16, width: u16, filled: u16, style: Style) {
+        let filled = filled.min(width);
+        self.hline(x, y, filled, '=', style);
+        self.hline(x.saturating_add(filled), y, width - filled, '-', style);
     }
 
     fn border(&mut self, x: u16, y: u16, width: u16, height: u16, style: Style) {
@@ -192,21 +212,52 @@ impl Canvas {
         }
     }
 
-    fn render(&self, output: &mut Stdout) -> io::Result<()> {
+    fn render_diff(
+        &self,
+        output: &mut Stdout,
+        previous: &mut Vec<Cell>,
+        force: bool,
+    ) -> io::Result<()> {
+        let force = force || previous.len() != self.cells.len();
+        if previous.len() != self.cells.len() {
+            previous.resize(
+                self.cells.len(),
+                Cell {
+                    ch: '\u{0}',
+                    style: Style::new(Color::Reset, Color::Reset),
+                },
+            );
+        }
+
+        let row_width = self.width as usize;
+        let has_changes = force || (0..self.height as usize).any(|row| {
+            let start = row * row_width;
+            let end = start + row_width;
+            self.cells[start..end] != previous[start..end]
+        });
+        if !has_changes {
+            return Ok(());
+        }
+
         output.queue(BeginSynchronizedUpdate)?;
         let mut active_style: Option<Style> = None;
+        let mut span = String::with_capacity(row_width);
 
         for y in 0..self.height {
-            output.queue(MoveTo(0, y))?;
-            let mut x = 0;
-            while x < self.width {
-                let index = y as usize * self.width as usize + x as usize;
-                let style = self.cells[index].style;
-                let mut span = String::new();
+            let row_start = y as usize * row_width;
+            let row_end = row_start + row_width;
+            if !force && self.cells[row_start..row_end] == previous[row_start..row_end] {
+                continue;
+            }
 
-                while x < self.width {
-                    let index = y as usize * self.width as usize + x as usize;
-                    let cell = self.cells[index];
+            output.queue(MoveTo(0, y))?;
+            let mut x = 0usize;
+            while x < row_width {
+                let style = self.cells[row_start + x].style;
+                span.clear();
+
+                while x < row_width {
+                    let cell = self.cells[row_start + x];
                     if cell.style != style {
                         break;
                     }
@@ -226,8 +277,10 @@ impl Canvas {
                     }))?;
                     active_style = Some(style);
                 }
-                output.queue(Print(span))?;
+                output.queue(Print(span.as_str()))?;
             }
+
+            previous[row_start..row_end].copy_from_slice(&self.cells[row_start..row_end]);
         }
 
         output.queue(ResetColor)?;
@@ -239,6 +292,9 @@ impl Canvas {
 
 pub struct Terminal {
     output: Stdout,
+    canvas: Canvas,
+    previous: Vec<Cell>,
+    force_redraw: bool,
 }
 
 impl Terminal {
@@ -256,21 +312,35 @@ impl Terminal {
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
-        Ok(Self { output })
+        Ok(Self {
+            output,
+            canvas: Canvas::empty(),
+            previous: Vec::new(),
+            force_redraw: true,
+        })
     }
 
     pub fn draw(&mut self, app: &App) -> io::Result<()> {
         let (width, height) = terminal::size()?;
         let palette = Palette::for_theme(app.theme);
-        let mut canvas = Canvas::new(width, height, palette);
+        let resized = self.canvas.reset(width, height, palette);
 
-        if width < 72 || height < 24 {
-            draw_too_small(&mut canvas, palette);
-        } else {
-            draw_app(&mut canvas, app, palette);
+        if resized {
+            self.output.queue(Clear(ClearType::All))?;
+            self.previous.clear();
+            self.force_redraw = true;
         }
 
-        canvas.render(&mut self.output)
+        if width < 72 || height < 24 {
+            draw_too_small(&mut self.canvas, palette);
+        } else {
+            draw_app(&mut self.canvas, app, palette);
+        }
+
+        self.canvas
+            .render_diff(&mut self.output, &mut self.previous, self.force_redraw)?;
+        self.force_redraw = false;
+        Ok(())
     }
 }
 
@@ -514,7 +584,7 @@ fn draw_home(
             canvas,
             app,
             palette,
-            &recent,
+            TrackRows::Indices(recent),
             app.selected,
             x + 2,
             list_y + 2,
@@ -534,8 +604,7 @@ fn draw_songs(
     width: u16,
     height: u16,
 ) {
-    let ids: Vec<usize> = (0..app.tracks.len()).collect();
-    if ids.is_empty() {
+    if app.tracks.is_empty() {
         empty_library(canvas, x, y, width, palette);
         return;
     }
@@ -543,7 +612,7 @@ fn draw_songs(
         canvas,
         app,
         palette,
-        &ids,
+        TrackRows::All(app.tracks.len()),
         app.selected,
         x + 2,
         y + 1,
@@ -597,7 +666,7 @@ fn draw_search(
                 let artist = &app.artists[index];
                 (
                     "ARTIST",
-                    artist.name.as_str(),
+                    artist.name.as_ref(),
                     format!("{} albums, {} songs", artist.album_count, artist.tracks.len()),
                     false,
                 )
@@ -606,7 +675,7 @@ fn draw_search(
                 let album = &app.albums[index];
                 (
                     "ALBUM",
-                    album.title.as_str(),
+                    album.title.as_ref(),
                     format!("{} - {} songs", album.artist, album.tracks.len()),
                     false,
                 )
@@ -615,7 +684,7 @@ fn draw_search(
                 let track = &app.tracks[index];
                 (
                     "SONG",
-                    track.title.as_str(),
+                    track.title.as_ref(),
                     format!("{} - {}", track.artist, track.album),
                     app.current == Some(index),
                 )
@@ -657,7 +726,7 @@ fn draw_albums(
                 canvas,
                 app,
                 palette,
-                &album.tracks,
+                TrackRows::Indices(&album.tracks),
                 app.selected,
                 x + 2,
                 y + 5,
@@ -722,7 +791,7 @@ fn draw_artists(
                 canvas,
                 app,
                 palette,
-                &artist.tracks,
+                TrackRows::Indices(&artist.tracks),
                 app.selected,
                 x + 2,
                 y + 5,
@@ -816,7 +885,7 @@ fn draw_playlists(
                     canvas,
                     app,
                     palette,
-                    &playlist.tracks,
+                    TrackRows::Indices(&playlist.tracks),
                     app.selected,
                     x + 2,
                     y + 5,
@@ -930,7 +999,7 @@ fn draw_folders(
             canvas.fill(browser_x + 1, row_y, browser_width.saturating_sub(2), 1, Style::new(palette.text, background));
             let entry = &app.browser_entries[position];
             match &entry.kind {
-                DirectoryEntryKind::Directory => {
+                DirectoryEntryKind::Directory(_) => {
                     canvas.text(browser_x + 2, row_y, "DIR", 3, Style::new(palette.accent, background).bold());
                     canvas.text(
                         browser_x + 6,
@@ -1010,6 +1079,28 @@ fn draw_folders(
 }
 
 #[derive(Clone, Copy)]
+enum TrackRows<'a> {
+    All(usize),
+    Indices(&'a [usize]),
+}
+
+impl TrackRows<'_> {
+    fn len(self) -> usize {
+        match self {
+            Self::All(len) => len,
+            Self::Indices(indices) => indices.len(),
+        }
+    }
+
+    fn get(self, position: usize) -> Option<usize> {
+        match self {
+            Self::All(len) => (position < len).then_some(position),
+            Self::Indices(indices) => indices.get(position).copied(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum TrackColumns {
     Album,
     TrackNumber,
@@ -1020,7 +1111,7 @@ fn draw_track_table(
     canvas: &mut Canvas,
     app: &App,
     palette: Palette,
-    ids: &[usize],
+    rows: TrackRows<'_>,
     selected: usize,
     x: u16,
     y: u16,
@@ -1053,9 +1144,12 @@ fn draw_track_table(
     canvas.hline(x, y + 1, width, '-', Style::new(palette.border, palette.background));
 
     let visible = height.saturating_sub(2) as usize;
-    let start = window_start(selected, ids.len(), visible);
-    for (row, position) in (start..ids.len()).take(visible).enumerate() {
-        let track_index = ids[position];
+    let row_count = rows.len();
+    let start = window_start(selected, row_count, visible);
+    for (row, position) in (start..row_count).take(visible).enumerate() {
+        let Some(track_index) = rows.get(position) else {
+            continue;
+        };
         let track = &app.tracks[track_index];
         let row_y = y + 2 + row as u16;
         let is_selected = position == selected;
@@ -1075,20 +1169,28 @@ fn draw_track_table(
         canvas.text(x + 1, row_y, marker, 1, Style::new(palette.accent, background).bold());
         canvas.text(x + 3, row_y, &format!("{:>5}", position + 1), 5, Style::new(palette.muted, background));
 
-        let title = match columns {
-            TrackColumns::Album => track.title.clone(),
-            TrackColumns::TrackNumber => format!("[{}] {}", track_number(track), track.title),
-        };
-        canvas.text(
-            title_x,
-            row_y,
-            &title,
-            middle_x.saturating_sub(title_x + 1),
-            selected_style(is_selected, background, palette),
-        );
+        match columns {
+            TrackColumns::Album => canvas.text(
+                title_x,
+                row_y,
+                &track.title,
+                middle_x.saturating_sub(title_x + 1),
+                selected_style(is_selected, background, palette),
+            ),
+            TrackColumns::TrackNumber => {
+                let title = format!("[{}] {}", track_number(track), track.title);
+                canvas.text(
+                    title_x,
+                    row_y,
+                    &title,
+                    middle_x.saturating_sub(title_x + 1),
+                    selected_style(is_selected, background, palette),
+                );
+            }
+        }
         let middle = match columns {
-            TrackColumns::Album => track.album.as_str(),
-            TrackColumns::TrackNumber => track.artist.as_str(),
+            TrackColumns::Album => track.album.as_ref(),
+            TrackColumns::TrackNumber => track.artist.as_ref(),
         };
         canvas.text(
             middle_x,
@@ -1170,9 +1272,14 @@ fn draw_player(
             .filter(|value| *value > 0.0)
             .map(|value| (position / value).clamp(0.0, 1.0))
             .unwrap_or(0.0);
-        let filled = (progress_width as f64 * ratio).round() as usize;
-        let bar = format!("{}{}", "=".repeat(filled), "-".repeat(progress_width as usize - filled));
-        canvas.text(progress_x, y + 3, &bar, progress_width, Style::new(palette.accent, palette.player));
+        let filled = (progress_width as f64 * ratio).round() as u16;
+        canvas.bar(
+            progress_x,
+            y + 3,
+            progress_width,
+            filled,
+            Style::new(palette.accent, palette.player),
+        );
     }
 
     canvas.text_right(
@@ -1183,13 +1290,12 @@ fn draw_player(
         Style::new(palette.text, palette.player).bold(),
     );
     let volume_bar_width = right_width.saturating_sub(8);
-    let volume_filled = volume_bar_width as usize * app.volume as usize / 100;
-    let volume_bar = format!("{}{}", "=".repeat(volume_filled), "-".repeat(volume_bar_width as usize - volume_filled));
-    canvas.text_right(
-        canvas.width.saturating_sub(2),
+    let volume_filled = volume_bar_width * app.volume as u16 / 100;
+    canvas.bar(
+        canvas.width.saturating_sub(2 + volume_bar_width),
         y + 2,
-        &volume_bar,
         volume_bar_width,
+        volume_filled,
         Style::new(palette.accent, palette.player),
     );
 

@@ -4,7 +4,7 @@ mod library;
 mod storage;
 mod ui;
 
-use std::{io, time::{Duration, Instant}};
+use std::io;
 
 use app::App;
 use crossterm::event::{self, Event, KeyEventKind};
@@ -13,26 +13,41 @@ use ui::Terminal;
 type Result<T> = io::Result<T>;
 
 fn main() -> Result<()> {
-    let mut app = App::new()?;
+    let mut app = App::new();
     let mut terminal = Terminal::enter()?;
-    let tick_rate = Duration::from_millis(100);
+
+    let mut redraw = true;
+    let mut progress_epoch = app.progress_epoch();
 
     loop {
-        let frame_started = Instant::now();
+        redraw |= app.tick();
 
-        app.tick();
-        terminal.draw(&app)?;
+        let next_progress_epoch = app.progress_epoch();
+        if next_progress_epoch != progress_epoch {
+            progress_epoch = next_progress_epoch;
+            redraw = true;
+        }
 
-        let wait = tick_rate.saturating_sub(frame_started.elapsed());
-        if event::poll(wait)? {
-            let event = event::read()?;
-            if let Event::Key(key) = event {
-                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-                    && app.handle_key(key)
-                {
+        if redraw {
+            terminal.draw(&app)?;
+            redraw = false;
+        }
+
+        if !event::poll(app.poll_interval())? {
+            continue;
+        }
+
+        match event::read()? {
+            Event::Key(key)
+                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
+            {
+                if app.handle_key(key) {
                     break;
                 }
+                redraw = true;
             }
+            Event::Resize(_, _) => redraw = true,
+            _ => {}
         }
     }
 

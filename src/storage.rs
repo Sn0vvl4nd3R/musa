@@ -1,5 +1,8 @@
 use std::{
-    env, fs, io,
+    collections::HashSet,
+    env, fs,
+    fs::File,
+    io::{self, BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -12,33 +15,31 @@ pub struct StoredPlaylist {
 }
 
 pub fn load_roots() -> Vec<PathBuf> {
-    let Ok(text) = fs::read_to_string(config_dir().join("libraries.txt")) else {
+    let Ok(file) = File::open(config_dir().join("libraries.txt")) else {
         return Vec::new();
     };
 
-    let mut roots: Vec<PathBuf> = text
+    let mut roots: Vec<PathBuf> = BufReader::new(file)
         .lines()
-        .map(str::trim)
+        .map_while(Result::ok)
+        .map(|line| line.trim().to_owned())
         .filter(|line| !line.is_empty())
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
         .collect();
 
-    roots.sort();
+    roots.sort_unstable();
     roots.dedup();
     roots
 }
 
 pub fn save_roots(roots: &[PathBuf]) -> io::Result<()> {
-    let dir = config_dir();
-    fs::create_dir_all(&dir)?;
-
-    let mut text = String::new();
-    for root in roots {
-        text.push_str(&root.to_string_lossy());
-        text.push('\n');
-    }
-    fs::write(dir.join("libraries.txt"), text)
+    atomic_write("libraries.txt", |writer| {
+        for root in roots {
+            writeln!(writer, "{}", root.display())?;
+        }
+        Ok(())
+    })
 }
 
 pub fn load_theme() -> Theme {
@@ -49,26 +50,24 @@ pub fn load_theme() -> Theme {
 }
 
 pub fn save_theme(theme: Theme) -> io::Result<()> {
-    let dir = config_dir();
-    fs::create_dir_all(&dir)?;
-    fs::write(
-        dir.join("theme"),
-        match theme {
-            Theme::Dark => "dark\n",
-            Theme::Light => "light\n",
-        },
-    )
+    atomic_write("theme", |writer| {
+        let value: &[u8] = match theme {
+            Theme::Dark => b"dark\n",
+            Theme::Light => b"light\n",
+        };
+        writer.write_all(value)
+    })
 }
 
 pub fn load_playlists() -> Vec<StoredPlaylist> {
-    let Ok(text) = fs::read_to_string(config_dir().join("playlists.txt")) else {
+    let Ok(file) = File::open(config_dir().join("playlists.txt")) else {
         return Vec::new();
     };
 
     let mut playlists = Vec::new();
     let mut current: Option<StoredPlaylist> = None;
 
-    for line in text.lines() {
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
         if line.is_empty() {
             if let Some(playlist) = current.take() {
                 push_valid_playlist(&mut playlists, playlist);
@@ -107,24 +106,28 @@ pub fn load_playlists() -> Vec<StoredPlaylist> {
     playlists
 }
 
-pub fn save_playlists(playlists: &[StoredPlaylist]) -> io::Result<()> {
-    let dir = config_dir();
-    fs::create_dir_all(&dir)?;
+pub fn save_playlists<'a, I>(playlists: I) -> io::Result<()>
+where
+    I: IntoIterator<Item = (&'a str, &'a [PathBuf])>,
+{
+    atomic_write("playlists.txt", |writer| {
+        let mut escaped = String::new();
+        for (name, tracks) in playlists {
+            writer.write_all(b"P\t")?;
+            escape_field_into(name, &mut escaped);
+            writer.write_all(escaped.as_bytes())?;
+            writer.write_all(b"\n")?;
 
-    let mut text = String::new();
-    for playlist in playlists {
-        text.push_str("P\t");
-        text.push_str(&escape_field(&playlist.name));
-        text.push('\n');
-        for path in &playlist.tracks {
-            text.push_str("T\t");
-            text.push_str(&escape_field(&path.to_string_lossy()));
-            text.push('\n');
+            for path in tracks {
+                writer.write_all(b"T\t")?;
+                escape_field_into(&path.to_string_lossy(), &mut escaped);
+                writer.write_all(escaped.as_bytes())?;
+                writer.write_all(b"\n")?;
+            }
+            writer.write_all(b"\n")?;
         }
-        text.push('\n');
-    }
-
-    fs::write(dir.join("playlists.txt"), text)
+        Ok(())
+    })
 }
 
 fn push_valid_playlist(playlists: &mut Vec<StoredPlaylist>, mut playlist: StoredPlaylist) {
@@ -137,28 +140,23 @@ fn push_valid_playlist(playlists: &mut Vec<StoredPlaylist>, mut playlist: Stored
         return;
     }
 
-    let mut unique = Vec::with_capacity(playlist.tracks.len());
-    for path in playlist.tracks {
-        if !unique.iter().any(|existing| existing == &path) {
-            unique.push(path);
-        }
-    }
-    playlist.tracks = unique;
+    let mut seen = HashSet::with_capacity(playlist.tracks.len());
+    playlist.tracks.retain(|path| seen.insert(path.clone()));
     playlists.push(playlist);
 }
 
-fn escape_field(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
+fn escape_field_into(value: &str, output: &mut String) {
+    output.clear();
+    output.reserve(value.len());
     for character in value.chars() {
         match character {
-            '\\' => escaped.push_str("\\\\"),
-            '\t' => escaped.push_str("\\t"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            other => escaped.push(other),
+            '\\' => output.push_str("\\\\"),
+            '\t' => output.push_str("\\t"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            other => output.push(other),
         }
     }
-    escaped
 }
 
 fn unescape_field(value: &str) -> String {
@@ -185,6 +183,28 @@ fn unescape_field(value: &str) -> String {
     }
 
     result
+}
+
+fn atomic_write(
+    file_name: &str,
+    write: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>,
+) -> io::Result<()> {
+    let dir = config_dir();
+    fs::create_dir_all(&dir)?;
+
+    let target = dir.join(file_name);
+    let temporary = dir.join(format!(".{file_name}.tmp"));
+    let file = File::create(&temporary)?;
+    let mut writer = BufWriter::new(file);
+    write(&mut writer)?;
+    writer.flush()?;
+    drop(writer);
+
+    #[cfg(windows)]
+    if target.exists() {
+        let _ = fs::remove_file(&target);
+    }
+    fs::rename(temporary, target)
 }
 
 pub fn home_dir() -> PathBuf {

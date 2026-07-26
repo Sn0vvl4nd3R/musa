@@ -1,8 +1,12 @@
 use std::{
+    collections::HashSet,
     ffi::OsStr,
     fs, io,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, SyncSender},
+    },
     thread,
     time::Duration,
 };
@@ -16,15 +20,14 @@ use lofty::{
 #[derive(Clone, Debug)]
 pub struct Track {
     pub path: PathBuf,
-    pub album_dir: PathBuf,
-    pub title: String,
-    pub artist: String,
-    pub album_artist: String,
-    pub album: String,
+    pub album_dir: Arc<Path>,
+    pub title: Arc<str>,
+    pub artist: Arc<str>,
+    pub album_artist: Arc<str>,
+    pub album: Arc<str>,
     pub track_no: Option<u32>,
     pub disc_no: Option<u32>,
     pub duration: Option<Duration>,
-    pub search_text: String,
 }
 
 impl Track {
@@ -63,31 +66,17 @@ impl Track {
         let artist = non_empty(artist).unwrap_or(fallback.artist);
         let album = non_empty(album).unwrap_or(fallback.album);
         let album_artist = non_empty(album_artist).unwrap_or_else(|| artist.clone());
-        let track_no = track_no.or(fallback.track_no);
-        let disc_no = disc_no.or(fallback.disc_no);
-        let album_dir = fallback.album_dir;
-
-        let search_text = format!(
-            "{}\n{}\n{}\n{}\n{}",
-            title,
-            artist,
-            album_artist,
-            album,
-            path.to_string_lossy()
-        )
-        .to_lowercase();
 
         Self {
             path,
-            album_dir,
-            title,
-            artist,
-            album_artist,
-            album,
-            track_no,
-            disc_no,
+            album_dir: Arc::from(fallback.album_dir.into_boxed_path()),
+            title: Arc::from(title),
+            artist: Arc::from(artist),
+            album_artist: Arc::from(album_artist),
+            album: Arc::from(album),
+            track_no: track_no.or(fallback.track_no),
+            disc_no: disc_no.or(fallback.disc_no),
             duration,
-            search_text,
         }
     }
 }
@@ -99,21 +88,27 @@ pub enum ScanEvent {
 }
 
 pub fn spawn_scan(roots: Vec<PathBuf>) -> Receiver<ScanEvent> {
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let result = scan(&roots, &sender).map_err(|error| error.to_string());
-        let _ = sender.send(ScanEvent::Finished(result));
-    });
+    let (sender, receiver) = mpsc::sync_channel(4);
+    let worker_sender = sender.clone();
+    let spawn = thread::Builder::new()
+        .name("musa-library-scan".to_owned())
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            let result = scan(&roots, &worker_sender).map_err(|error| error.to_string());
+            let _ = worker_sender.send(ScanEvent::Finished(result));
+        });
+
+    if let Err(error) = spawn {
+        let _ = sender.send(ScanEvent::Finished(Err(format!(
+            "failed to start library scan: {error}"
+        ))));
+    }
     receiver
 }
 
-fn scan(roots: &[PathBuf], sender: &Sender<ScanEvent>) -> io::Result<Vec<Track>> {
-    let mut paths = Vec::new();
-    for root in roots {
-        collect(root, &mut paths)?;
-    }
-
-    paths.sort_by_cached_key(|path| path.to_string_lossy().to_lowercase());
+fn scan(roots: &[PathBuf], sender: &SyncSender<ScanEvent>) -> io::Result<Vec<Track>> {
+    let mut paths = collect_audio_paths(roots)?;
+    paths.sort_unstable();
     paths.dedup();
 
     let total = paths.len();
@@ -121,66 +116,110 @@ fn scan(roots: &[PathBuf], sender: &Sender<ScanEvent>) -> io::Result<Vec<Track>>
     for (index, path) in paths.into_iter().enumerate() {
         tracks.push(Track::from_path(path));
         let done = index + 1;
-        if done == total || done % 16 == 0 {
-            let _ = sender.send(ScanEvent::Progress { done, total });
+        if done == total || done % 64 == 0 {
+            let _ = sender.try_send(ScanEvent::Progress { done, total });
         }
     }
 
-    tracks.sort_by(|left, right| {
-        lower(&left.artist)
-            .cmp(&lower(&right.artist))
-            .then_with(|| lower(&left.album).cmp(&lower(&right.album)))
-            .then_with(|| left.disc_no.unwrap_or(0).cmp(&right.disc_no.unwrap_or(0)))
-            .then_with(|| {
-                left.track_no
-                    .unwrap_or(u32::MAX)
-                    .cmp(&right.track_no.unwrap_or(u32::MAX))
-            })
-            .then_with(|| lower(&left.title).cmp(&lower(&right.title)))
-            .then_with(|| left.path.cmp(&right.path))
+    intern_repeated_metadata(&mut tracks);
+
+    tracks.sort_by_cached_key(|track| {
+        (
+            track.artist.to_lowercase(),
+            track.album.to_lowercase(),
+            track.disc_no.unwrap_or(0),
+            track.track_no.unwrap_or(u32::MAX),
+            track.title.to_lowercase(),
+            track.path.clone(),
+        )
     });
 
     Ok(tracks)
 }
 
-fn collect(path: &Path, output: &mut Vec<PathBuf>) -> io::Result<()> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) => {
-            return Ok(())
+fn intern_repeated_metadata(tracks: &mut [Track]) {
+    let mut strings = HashSet::<Arc<str>>::with_capacity(tracks.len().saturating_mul(2));
+    let mut directories = HashSet::<Arc<Path>>::with_capacity((tracks.len() / 8).max(8));
+    for track in tracks {
+        intern_arc(&mut strings, &mut track.artist);
+        intern_arc(&mut strings, &mut track.album_artist);
+        intern_arc(&mut strings, &mut track.album);
+        intern_path(&mut directories, &mut track.album_dir);
+    }
+}
+
+fn intern_arc(pool: &mut HashSet<Arc<str>>, value: &mut Arc<str>) {
+    if let Some(existing) = pool.get(value.as_ref()) {
+        *value = Arc::clone(existing);
+    } else {
+        pool.insert(Arc::clone(value));
+    }
+}
+
+fn intern_path(pool: &mut HashSet<Arc<Path>>, value: &mut Arc<Path>) {
+    if let Some(existing) = pool.get(value.as_ref()) {
+        *value = Arc::clone(existing);
+    } else {
+        pool.insert(Arc::clone(value));
+    }
+}
+
+fn collect_audio_paths(roots: &[PathBuf]) -> io::Result<Vec<PathBuf>> {
+    let mut output = Vec::new();
+    let mut pending = Vec::with_capacity(roots.len().max(16));
+    pending.extend(roots.iter().cloned());
+
+    while let Some(path) = pending.pop() {
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            continue;
         }
-        Err(error) => return Err(error),
-    };
-
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-
-    if metadata.is_file() {
-        if is_supported_audio(path) {
-            output.push(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+        if file_type.is_file() {
+            if is_supported_audio(&path) {
+                output.push(path);
+            }
+            continue;
         }
-        return Ok(());
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let read_dir = match fs::read_dir(&path) {
+            Ok(read_dir) => read_dir,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => continue,
+            Err(error) => return Err(error),
+        };
+
+        for entry in read_dir.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            let child = entry.path();
+            if file_type.is_dir() {
+                pending.push(child);
+            } else if file_type.is_file() && is_supported_audio(&child) {
+                output.push(child);
+            }
+        }
     }
 
-    if !metadata.is_dir() {
-        return Ok(());
-    }
-
-    let read_dir = match fs::read_dir(path) {
-        Ok(read_dir) => read_dir,
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return Ok(()),
-        Err(error) => return Err(error),
-    };
-
-    let mut entries: Vec<_> = read_dir.filter_map(Result::ok).collect();
-    entries.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
-
-    for entry in entries {
-        collect(&entry.path(), output)?;
-    }
-
-    Ok(())
+    Ok(output)
 }
 
 pub fn read_directory_entries(path: &Path) -> io::Result<Vec<DirectoryEntry>> {
@@ -191,63 +230,47 @@ pub fn read_directory_entries(path: &Path) -> io::Result<Vec<DirectoryEntry>> {
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
-        if file_type.is_dir() && !file_type.is_symlink() {
+        if file_type.is_symlink() {
+            continue;
+        }
+
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if file_type.is_dir() {
             entries.push(DirectoryEntry {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                path: entry.path(),
-                kind: DirectoryEntryKind::Directory,
+                name,
+                kind: DirectoryEntryKind::Directory(path),
             });
-        } else if file_type.is_file() && is_supported_audio(&entry.path()) {
-            let path = entry.path();
+        } else if file_type.is_file() && is_supported_audio(&path) {
             let track = Track::from_path(path.clone());
             entries.push(DirectoryEntry {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                path,
+                name,
                 kind: DirectoryEntryKind::Track(track),
             });
         }
     }
 
-    entries.sort_by(|left, right| {
-        left.kind
-            .sort_rank()
-            .cmp(&right.kind.sort_rank())
-            .then_with(|| match (&left.kind, &right.kind) {
-                (DirectoryEntryKind::Track(left), DirectoryEntryKind::Track(right)) => left
-                    .disc_no
-                    .unwrap_or(0)
-                    .cmp(&right.disc_no.unwrap_or(0))
-                    .then_with(|| {
-                        left.track_no
-                            .unwrap_or(u32::MAX)
-                            .cmp(&right.track_no.unwrap_or(u32::MAX))
-                    })
-                    .then_with(|| lower(&left.title).cmp(&lower(&right.title))),
-                _ => lower(&left.name).cmp(&lower(&right.name)),
-            })
+    entries.sort_by_cached_key(|entry| match &entry.kind {
+        DirectoryEntryKind::Directory(_) => (0, 0, 0, entry.name.to_lowercase()),
+        DirectoryEntryKind::Track(track) => (
+            1,
+            track.disc_no.unwrap_or(0),
+            track.track_no.unwrap_or(u32::MAX),
+            track.title.to_lowercase(),
+        ),
     });
     Ok(entries)
 }
 
 #[derive(Clone, Debug)]
 pub enum DirectoryEntryKind {
-    Directory,
+    Directory(PathBuf),
     Track(Track),
-}
-
-impl DirectoryEntryKind {
-    fn sort_rank(&self) -> u8 {
-        match self {
-            Self::Directory => 0,
-            Self::Track(_) => 1,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
 pub struct DirectoryEntry {
     pub name: String,
-    pub path: PathBuf,
     pub kind: DirectoryEntryKind,
 }
 
@@ -256,18 +279,13 @@ pub fn is_supported_audio(path: &Path) -> bool {
         return false;
     };
 
-    matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "flac" | "mp3" | "ogg" | "oga" | "wav" | "m4a" | "m4b" | "mp4" | "aac"
-    )
+    ["flac", "mp3", "ogg", "oga", "wav", "m4a", "m4b", "mp4", "aac"]
+        .iter()
+        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
-}
-
-fn lower(value: &str) -> String {
-    value.to_lowercase()
 }
 
 struct FallbackMeta {
@@ -397,15 +415,20 @@ fn parse_leading_numbers(input: &str) -> (Option<u32>, Option<u32>, &str) {
 fn parse_disc_label(input: &str) -> Option<u32> {
     let lower = input.to_ascii_lowercase();
     for prefix in ["cd", "disc", "disk"] {
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            let digits: String = rest
-                .chars()
-                .skip_while(|ch| !ch.is_ascii_digit())
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect();
-            if !digits.is_empty() {
-                return digits.parse().ok();
-            }
+        let Some(rest) = lower.strip_prefix(prefix) else {
+            continue;
+        };
+        let bytes = rest.as_bytes();
+        let mut start = 0;
+        while start < bytes.len() && !bytes[start].is_ascii_digit() {
+            start += 1;
+        }
+        let mut end = start;
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        if start < end {
+            return rest[start..end].parse().ok();
         }
     }
     None
@@ -421,7 +444,7 @@ fn is_bucket(input: &str) -> bool {
 
 fn clean_directory_name(input: &str) -> String {
     let mut value = input.replace('_', " ");
-    if value.len() >= 7 {
+    if value.len() >= 5 {
         let bytes = value.as_bytes();
         if bytes[..4].iter().all(|byte| byte.is_ascii_digit())
             && matches!(bytes[4], b' ' | b'-' | b'.' | b'_')
@@ -429,5 +452,13 @@ fn clean_directory_name(input: &str) -> String {
             value = value[5..].trim_start().to_owned();
         }
     }
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+
+    let mut cleaned = String::with_capacity(value.len());
+    for word in value.split_whitespace() {
+        if !cleaned.is_empty() {
+            cleaned.push(' ');
+        }
+        cleaned.push_str(word);
+    }
+    cleaned
 }
